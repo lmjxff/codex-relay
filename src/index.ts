@@ -13,8 +13,9 @@ import * as Diff2Html from 'diff2html';
 import QRCode from 'qrcode';
 import { AuthRateLimiter, createAuthToken, escapeHtml, getClientIp as resolveClientIp, isLocalhostRequest, verifyToken } from './security';
 import { readGitDiff, readGitStatus } from './git';
-import { attachPtyLifecycle, terminalSize } from './terminal-lifecycle';
+import { attachPtyLifecycle, terminalSize, sharedTerminalSize, ptyExitMessage, PtyExit } from './terminal-lifecycle';
 import { preparePtyRuntime } from './pty-setup';
+import { TerminalScreen } from './terminal-screen';
 import {
   startCloudflareTunnel,
   stopActiveTunnel,
@@ -140,17 +141,41 @@ interface WsClientMessage {
   id?: string;
 }
 
-const MAX_BUFFER_CHARS = 64 * 1024;
-let terminalBuffer = '';
 let ptyProcess: pty.IPty | null = null;
+let terminalStarted = false;
+let lastTerminalExit: PtyExit | null = null;
+let terminalDimensions = terminalSize();
+let terminalScreen = new TerminalScreen(terminalDimensions.cols, terminalDimensions.rows);
 const clients = new Set<WebSocket>();
+const clientSizes = new Map<WebSocket, { cols: number; rows: number }>();
 const acceptedInputs = new Map<string, number>();
 
-function appendBuffer(chunk: string): void {
-  terminalBuffer += chunk;
-  if (terminalBuffer.length > MAX_BUFFER_CHARS) {
-    terminalBuffer = terminalBuffer.slice(terminalBuffer.length - MAX_BUFFER_CHARS);
-  }
+function screenError(): void {
+  console.error('[Terminal] Unable to update the shared screen. Check the host and restart the session.');
+}
+
+function appendOutput(screen: TerminalScreen, data: string): void {
+  void screen.write(data, () => {
+    if (screen === terminalScreen) broadcast({ type: 'output', data });
+  }).catch(screenError);
+}
+
+function updateSharedSize(): void {
+  const size = sharedTerminalSize(clientSizes.values(), terminalDimensions);
+  if (size.cols === terminalDimensions.cols && size.rows === terminalDimensions.rows) return;
+  terminalDimensions = size;
+  const screen = terminalScreen;
+  const proc = ptyProcess;
+  void screen.resize(size.cols, size.rows, snapshot => {
+    if (screen !== terminalScreen) return;
+    // Send the same parsed screen/geometry before requesting the application's
+    // repaint. A phone and desktop must interpret cursor movement on one grid.
+    broadcast({ type: 'history', ...snapshot });
+    if (proc && ptyProcess === proc) {
+      try { proc.resize(size.cols, size.rows); }
+      catch { console.warn('[Terminal] Resize was not accepted. Check whether the session has ended.'); }
+    }
+  }).catch(screenError);
 }
 
 function broadcast(payload: Record<string, unknown>): void {
@@ -177,12 +202,15 @@ function resolveDefaultShell(): { shell: string; args: string[] } {
 
 function spawnCodexPty(cols = 80, rows = 24): pty.IPty {
   if (ptyProcess) {
+    const previous = ptyProcess;
+    // Retire BEFORE kill: Windows can report an exit synchronously while its
+    // pipes are closing, before a replacement has been assigned.
+    ptyProcess = null;
     try {
-      ptyProcess.kill();
+      previous.kill();
     } catch {
       // ignore cleanup error
     }
-    ptyProcess = null;
   }
 
   const { shell, args } = resolveDefaultShell();
@@ -191,28 +219,36 @@ function spawnCodexPty(cols = 80, rows = 24): pty.IPty {
   delete terminalEnv.RELAY_AUTH_TOKEN;
   delete terminalEnv.RELAY_PIN;
   delete terminalEnv.CF_TUNNEL_TOKEN;
+  terminalDimensions = sharedTerminalSize(clientSizes.values(), terminalSize(cols, rows));
   const proc = pty.spawn(shell, args, {
     name: 'xterm-256color',
-    ...terminalSize(cols, rows),
+    ...terminalDimensions,
     cwd: TARGET_CWD,
     env: terminalEnv,
   });
 
   ptyProcess = proc;
+  terminalStarted = true;
+  lastTerminalExit = null;
+  acceptedInputs.clear();
+  const previousScreen = terminalScreen;
+  const screen = new TerminalScreen(terminalDimensions.cols, terminalDimensions.rows);
+  terminalScreen = screen;
+  void previousScreen.dispose().catch(screenError);
+  broadcast({ type: 'session-reset', ...terminalDimensions });
 
   const banner = `\r\n\x1b[1;36m[codex-relay]\x1b[0m Attached to workspace: \x1b[33m${TARGET_CWD}\x1b[0m\r\n`;
-  appendBuffer(banner);
-  broadcast({ type: 'output', data: banner });
+  appendOutput(screen, banner);
 
   attachPtyLifecycle(proc, () => ptyProcess, (data: string) => {
-    appendBuffer(data);
-    broadcast({ type: 'output', data });
-  }, ({ exitCode, signal }) => {
-    const msg = `\r\n\x1b[1;31m[codex-relay]\x1b[0m Process exited (code=${exitCode}, signal=${signal ?? 'none'}).\r\n`;
-    appendBuffer(msg);
-    broadcast({ type: 'output', data: msg });
-    broadcast({ type: 'status', running: false, exitCode });
+    appendOutput(screen, data);
+  }, event => {
     ptyProcess = null;
+    lastTerminalExit = event;
+    const color = event.kind === 'error' ? '31' : event.kind === 'unknown' ? '33' : '90';
+    const msg = `\r\n\x1b[${color}m[codex-relay] ${ptyExitMessage(event)}\x1b[0m\r\n`;
+    appendOutput(screen, msg);
+    broadcast({ type: 'status', running: false, ...event });
   });
 
   if (AUTO_START_CODEX) {
@@ -531,7 +567,7 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
   clients.add(ws);
   console.log(`[WebSocket] Authenticated client connected (${clientIp}), active=${clients.size}`);
 
-  if (!ptyProcess) {
+  if (!ptyProcess && !terminalStarted) {
     try { spawnCodexPty(); }
     catch {
       clients.delete(ws);
@@ -544,6 +580,7 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
     JSON.stringify({
       type: 'status',
       running: Boolean(ptyProcess),
+      ...(lastTerminalExit || {}),
       pid: ptyProcess?.pid ?? null,
       cwd: TARGET_CWD,
       cmd: CODEX_CMD,
@@ -551,7 +588,10 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
     })
   );
 
-  ws.send(JSON.stringify({ type: 'history', data: terminalBuffer }));
+  const screen = terminalScreen;
+  void screen.snapshot(snapshot => {
+    if (screen === terminalScreen && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'history', ...snapshot }));
+  }).catch(screenError);
 
   ws.on('message', (raw: Buffer | string) => {
     let messageId: string | undefined;
@@ -581,16 +621,15 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
           }
           break;
         case 'resize':
-          if (ptyProcess && typeof msg.cols === 'number' && typeof msg.rows === 'number') {
-            const { cols, rows } = terminalSize(msg.cols, msg.rows);
-            ptyProcess.resize(cols, rows);
+          if (typeof msg.cols === 'number' && typeof msg.rows === 'number') {
+            clientSizes.set(ws, terminalSize(msg.cols, msg.rows));
+            updateSharedSize();
           }
           break;
         case 'action':
           sendTerminalAction(msg.action);
           break;
         case 'restart':
-          terminalBuffer = '';
           spawnCodexPty(msg.cols || 80, msg.rows || 24);
           break;
         case 'ping':
@@ -606,8 +645,14 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
 
   ws.on('close', () => {
     clients.delete(ws);
+    clientSizes.delete(ws);
+    updateSharedSize();
   });
-  ws.on('error', () => clients.delete(ws));
+  ws.on('error', () => {
+    clients.delete(ws);
+    clientSizes.delete(ws);
+    updateSharedSize();
+  });
 });
 
 app.use((_error: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -681,12 +726,13 @@ function gracefulShutdown(reason: string, exitCode = 0): void {
   stopActiveTunnel();
 
   if (ptyProcess) {
+    const previous = ptyProcess;
+    ptyProcess = null;
     try {
-      ptyProcess.kill();
+      previous.kill();
     } catch {
       // ignore
     }
-    ptyProcess = null;
   }
 
   for (const ws of clients) {

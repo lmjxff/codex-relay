@@ -10,7 +10,7 @@ test('HTTP and WebSocket enforce auth, preserve Git paths and acknowledge input 
   const originalEnv={...process.env};
   const originalCwd=process.cwd();
   const processes=[];
-  let server,client,api;
+  let server,client,other,api;
   try {
     repository(directory);
     fs.mkdirSync(path.join(directory,'new dir'));
@@ -19,7 +19,7 @@ test('HTTP and WebSocket enforce auth, preserve Git paths and acknowledge input 
     Object.assign(process.env,{RELAY_AUTH_TOKEN:'',RELAY_PIN:'',ENABLE_TUNNEL:'false',AUTO_START_CODEX:'false',AUTO_OPEN_QR:'false',HOST:'127.0.0.1',CODEX_CWD:directory,CF_HOSTNAME:''});
     process.chdir(directory);
     const pty={spawn(){
-      const proc={pid:processes.length+100,writes:[],write(data){this.writes.push(data);},resize(){},kill(){},
+      const proc={pid:processes.length+100,writes:[],sizes:[],write(data){this.writes.push(data);},resize(cols,rows){this.sizes.push({cols,rows});},kill(){this.exit?.({exitCode:undefined});},
         onData(callback){this.data=callback;},onExit(callback){this.exit=callback;}};
       processes.push(proc);return proc;
     }};
@@ -67,20 +67,41 @@ test('HTTP and WebSocket enforce auth, preserve Git paths and acknowledge input 
       while(!predicate()){if(Date.now()>deadline)throw Error('WebSocket response timeout');await new Promise(resolve=>setTimeout(resolve,10));}
     }
     await waitFor(()=>messages.some(message=>message.type==='history'));
+    client.send(JSON.stringify({type:'resize',cols:120,rows:35}));
+    await waitFor(()=>processes[0].sizes.at(-1)?.cols===120);
+    const otherMessages=[];
+    other=new WebSocket(base.replace('http','ws')+'/ws',{headers});
+    other.on('message',raw=>otherMessages.push(JSON.parse(raw)));
+    await new Promise((resolve,reject)=>{other.once('open',resolve);other.once('error',reject);});
+    other.send(JSON.stringify({type:'resize',cols:40,rows:12}));
+    await waitFor(()=>processes[0].sizes.at(-1)?.cols===40&&otherMessages.some(message=>message.type==='history'&&message.cols===40));
+    assert.equal(messages.filter(message=>message.type==='history').at(-1).rows,12);
     const frame={type:'input',id:'synthetic-prompt-1',data:'test prompt\r'};
     client.send(JSON.stringify(frame));client.send(JSON.stringify(frame));
     await waitFor(()=>messages.filter(message=>message.type==='input-ack').length===2);
     assert.equal(processes[0].writes.length,1);
+    client.send(JSON.stringify({type:'action',action:'approve'}));
+    await waitFor(()=>processes[0].writes.length===2);
+    assert.equal(processes[0].writes[1],process.platform==='win32'?'y\r':'y\n');
+    processes[0].data('\x1b[H\x1b[2JWorking: approved\r\n');
+    await waitFor(()=>[messages,otherMessages].every(list=>list.some(message=>message.type==='output'&&message.data.includes('Working: approved'))));
     client.send(JSON.stringify({type:'input',id:'oversize',data:'a'.repeat(16385)}));
     await waitFor(()=>messages.some(message=>message.type==='input-error'&&message.id==='oversize'));
     client.send(JSON.stringify({type:'restart'}));
     await waitFor(()=>processes.length===2);
+    assert(!messages.some(message=>message.type==='status'&&message.running===false),'intentional restart must not broadcast the retired process exit');
     processes[0].exit({exitCode:0});
     client.send(JSON.stringify({type:'input',id:'synthetic-prompt-2',data:'replacement\r'}));
     await waitFor(()=>messages.some(message=>message.type==='input-ack'&&message.id==='synthetic-prompt-2'));
     assert.equal(processes[1].writes.length,1);
+    processes[1].exit({exitCode:undefined});
+    await waitFor(()=>messages.some(message=>message.type==='status'&&message.running===false));
+    const stopped=messages.find(message=>message.type==='status'&&message.running===false);
+    assert.equal(stopped.kind,'unknown');assert.equal(stopped.exitCode,null);
+    await waitFor(()=>messages.some(message=>message.type==='output'&&message.data.includes('did not report')));
+    assert(!messages.some(message=>message.type==='output'&&message.data.includes('code=undefined')));
   } finally {
-    client?.terminate();
+    client?.terminate();other?.terminate();
     if(api){for(const ws of api.wss.clients)ws.terminate();await new Promise(resolve=>api.wss.close(resolve));}
     if(server){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
     process.chdir(originalCwd);

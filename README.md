@@ -17,6 +17,8 @@ Follow a local Codex CLI session from your phone browser, send terminal input, a
 
 **Approve (y)** / **Reject (n)** send `y` / `n` followed by Enter to whichever program is running. These are terminal shortcuts, not approvals bound to a particular Codex request. Read the terminal prompt before using them.
 
+A numbered menu inside the terminal is rendered text, not an HTML button. Tapping its text does not necessarily select it. Use the terminal keyboard or Relay's **Enter** button to confirm the currently highlighted option; use Approve/Reject only when the program expects those keys.
+
 ## Requirements
 
 - Node.js 22 or 24, npm, and Git on `PATH`.
@@ -125,8 +127,9 @@ Relay requires the configured hostname and does not create dashboard routes in t
 1. **Send** keeps text during disconnection or until acknowledgement. An acknowledgement means the PTY accepted a write, not that Codex finished. Inspect the terminal before retrying uncertain delivery. Deduplication lasts up to five minutes with a bounded in-memory cache; it does not guarantee exactly-once delivery across server restarts.
 2. **Git Diff** includes new directories and per-file filtering. Untracked files over 256 KiB are listed as omitted; binary files have no text preview. Overall Git output above 10 MiB can return an error. Use local Git for a complete review.
 3. **Restart** terminates the shared terminal and starts another. All browsers control the same session.
-4. Reconnection replaces the display with the most recent 64 Ki characters of output. This memory-only tail is not persistent/full history and may start mid-line or mid-escape sequence.
+4. All connected browsers share the smallest reported viewport size. A desktop may become narrower while a phone is connected; this keeps cursor movement and menu redraws consistent. Reconnection and resizing restore the server's parsed current screen, with up to 1,000 scrollback lines. This bounded in-memory view is not persistent/full task history.
 5. **Lock** removes this browser's saved credential. It does not revoke other browsers or rotate the server credential.
+6. A normal exit, a reported failure, and a closed connection without an exit status are displayed separately. An unavailable exit code is not evidence that Codex crashed. Reconnecting a browser does not automatically replace an ended session; use **Restart** or **Run codex** explicitly. Restart clears the shared screen in all browsers.
 
 ## Configuration
 
@@ -149,6 +152,16 @@ Relay requires the configured hostname and does not create dashboard routes in t
 | `CF_OVERWRITE_DNS` | `false` | Permit replacing existing DNS in certificate mode. |
 
 ### Upgrade from 0.2.0
+
+For an existing checkout, finish active work, stop Relay with Ctrl+C, and keep your local `.env`. Then run:
+
+```bash
+git pull --ff-only
+npm ci
+npm start
+```
+
+Refresh **every** connected browser after restarting so the client and server use the same screen protocol. Version 0.2.2 adds runtime dependencies for shared screen restoration.
 
 - Remove the former author's domain from local `.env`. Leave the hostname blank for a temporary tunnel, or use a domain you control.
 - The new defaults allow local access only. An existing `.env` keeps its explicit `HOST`/`ENABLE_TUNNEL` choices; copying defaults does not override process environment variables.
@@ -179,7 +192,7 @@ Scripts should prefer `Authorization: Bearer <relay-credential>` or `x-relay-tok
 | `POST /api/action` | Authenticated `action`: `approve`, `reject`, `enter`, `esc`, `ctrl_c`, `start_codex`. |
 | `/ws` | Authenticated stream; browser query token or script auth header. Foreign browser origins are rejected. |
 
-WebSocket outputs include `status`, `history`, `output`. Send `{ "type": "input", "id": "<unique-id>", "data": "..." }` for `input-ack`/`input-error` with that ID. Input limit: 16 Ki characters; frame limit: 128 KiB. Direct keystrokes without IDs remain supported. Other messages: `resize`, `action`, `restart`, `ping`.
+WebSocket outputs include `status`, `history`, `output`, and `session-reset`. History/reset messages carry the shared `cols`/`rows`; clients must apply them in order with terminal writes. Ended status includes `kind` (`normal`, `error`, `unknown`) and nullable `exitCode`/`signal`. Send `{ "type": "input", "id": "<unique-id>", "data": "..." }` for `input-ack`/`input-error` with that ID. Input limit: 16 Ki characters; frame limit: 128 KiB. Direct keystrokes without IDs remain supported. Other messages: `resize`, `action`, `restart`, `ping`.
 
 ## Troubleshooting
 
@@ -193,6 +206,7 @@ WebSocket outputs include `status`, `history`, `output`. Send `{ "type": "input"
 | No public QR | Check tunnel opt-in, long Relay credential, cloudflared connectivity, authorization/DNS routes; refresh `/qr`. |
 | Login returns 429 | Wait for the five-minute failure window; check the credential locally. |
 | Restart interrupts work | This is one shared in-memory terminal, not a persistent task scheduler. |
+| Approval text remains on another screen | Restart Relay after updating, refresh every browser to load the new client, and verify both use the shared geometry. Terminal menu text is not a clickable web button; confirm the highlighted option with Enter. Report remaining redraw issues with OS/browser details and redacted screenshots. |
 
 ## Development and verification
 

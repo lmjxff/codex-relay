@@ -21,6 +21,7 @@
   const promptStatus = document.getElementById('prompt-status');
   const btnSend = document.getElementById('btn-send');
   const btnQr = document.getElementById('btn-qr');
+  const terminalState = document.getElementById('terminal-state');
   if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(window.location.hostname)) btnQr.hidden = true;
 
   let activeTab = 'terminal';
@@ -32,6 +33,10 @@
   let isAuthenticated = false;
   let pendingPrompt = null;
   let pendingTimer = null;
+  let terminalRunning = null;
+  let lastViewportSize = '';
+  const renderQueue = [];
+  let rendering = false;
 
   function setPromptStatus(message, sending = false) {
     promptStatus.textContent = message;
@@ -65,16 +70,44 @@
   term.loadAddon(fitAddon);
   term.open(terminalContainer);
 
+  function renderTerminal(operation) {
+    renderQueue.push(operation);
+    drainTerminal();
+  }
+
+  function drainTerminal() {
+    if (rendering || !renderQueue.length) return;
+    rendering = true;
+    const operation = renderQueue.shift();
+    const finish = () => { rendering = false; drainTerminal(); };
+    try {
+      if (operation.type === 'history' || operation.type === 'session-reset') {
+        term.reset();
+        if (Number.isInteger(operation.cols) && Number.isInteger(operation.rows)) {
+          term.resize(operation.cols, operation.rows);
+        }
+      }
+      // A reset/resize must wait for preceding asynchronous terminal writes.
+      if (typeof operation.data === 'string' && operation.data.length) term.write(operation.data, finish);
+      else finish();
+    } catch { finish(); }
+  }
+
   function fitTerminal() {
     if (activeTab !== 'terminal' || !isAuthenticated) return;
     try {
-      fitAddon.fit();
+      // Measure without resizing independently: every browser uses one grid.
+      const dimensions = fitAddon.proposeDimensions();
+      if (!dimensions || !Number.isFinite(dimensions.cols) || !Number.isFinite(dimensions.rows)) return;
       if (ws && ws.readyState === WebSocket.OPEN) {
+        const sizeKey = `${dimensions.cols}:${dimensions.rows}`;
+        if (sizeKey === lastViewportSize) return;
+        lastViewportSize = sizeKey;
         ws.send(
           JSON.stringify({
             type: 'resize',
-            cols: term.cols,
-            rows: term.rows,
+            cols: dimensions.cols,
+            rows: dimensions.rows,
           })
         );
       }
@@ -86,6 +119,8 @@
   window.addEventListener('resize', () => {
     fitTerminal();
   });
+  window.visualViewport?.addEventListener('resize', fitTerminal);
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fitTerminal).observe(terminalContainer);
 
   // Forward direct terminal keystrokes to PTY over WebSocket
   term.onData((data) => {
@@ -183,7 +218,8 @@
     localStorage.removeItem(STORAGE_KEY);
     authToken = '';
     authTokenInput.value = '';
-    term.clear();
+    renderQueue.length = 0;
+    renderTerminal({ type: 'session-reset' });
     showLockScreen('已安全锁定终端');
   });
 
@@ -216,6 +252,7 @@
     }
     const connection = new WebSocket(wsUrl);
     ws = connection;
+    lastViewportSize = '';
 
     connection.addEventListener('open', () => {
       if (ws !== connection) return;
@@ -229,10 +266,15 @@
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'history' && typeof msg.data === 'string') {
-          term.reset();
-          term.write(msg.data);
+          renderTerminal(msg);
         } else if (msg.type === 'output' && typeof msg.data === 'string') {
-          term.write(msg.data);
+          renderTerminal(msg);
+        } else if (msg.type === 'session-reset') {
+          renderTerminal(msg);
+          if (pendingPrompt) {
+            pendingPrompt = null;
+            preservePendingPrompt('终端已重启，输入已保留；请检查后重新发送');
+          }
         } else if (msg.type === 'input-ack' && pendingPrompt && msg.id === pendingPrompt.id) {
           if (promptInput.value === pendingPrompt.text) promptInput.value = '';
           pendingPrompt = null;
@@ -240,6 +282,14 @@
         } else if (msg.type === 'input-error' && pendingPrompt && msg.id === pendingPrompt.id) {
           preservePendingPrompt('发送未成功，输入已保留，请检查终端后重试');
         } else if (msg.type === 'status') {
+          if (typeof msg.running === 'boolean') {
+            terminalRunning = msg.running;
+            terminalState.hidden = msg.running;
+            terminalState.textContent = msg.running ? '' : msg.kind === 'normal'
+              ? '终端会话已正常结束。点击 Restart 新建会话。'
+              : msg.kind === 'error' ? '终端会话已结束，请检查上方输出，再点击 Restart。'
+              : '终端连接已关闭，系统未提供退出状态。点击 Restart 重新连接。';
+          }
           if (msg.cwd) {
             cwdLabel.textContent = msg.cwd;
             cwdLabel.title = msg.cwd;
@@ -295,6 +345,10 @@
     if (!isAuthenticated) return;
     const text = promptInput.value;
     if (!text.trim()) return;
+    if (terminalRunning === false) {
+      setPromptStatus('终端已关闭，输入已保留，请先点击 Restart');
+      return;
+    }
     if (pendingPrompt?.waiting) return;
     hapticFeedback(20);
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -323,7 +377,6 @@
   btnRestart.addEventListener('click', () => {
     if (!isAuthenticated) return;
     hapticFeedback(35);
-    term.clear();
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(
         JSON.stringify({

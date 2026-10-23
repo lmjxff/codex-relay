@@ -1,6 +1,6 @@
 {
   "name": "codex-relay",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A mobile-friendly bridge for supervising a local Codex CLI, with authenticated terminal streaming, Git previews and optional Cloudflare tunnels.",
   "main": "dist/index.js",
   "bin": {
@@ -55,6 +55,8 @@
   "license": "MIT",
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-serialize": "^0.13.0",
+    "@xterm/headless": "^5.5.0",
     "@xterm/xterm": "^5.5.0",
     "cloudflared": "^0.7.0",
     "diff2html": "^3.4.48",

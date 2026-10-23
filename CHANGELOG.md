@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2 — 2026-10-23
+
+- Keep every browser on one shared terminal grid sized for the smallest connected viewport. Restore a parsed server-side screen on reconnect/resize, with 1,000 lines of bounded scrollback, instead of replaying an arbitrary ANSI byte tail.
+- Order browser writes, resets and resizes, and reset every connected screen when the shared session restarts. Retain drafts when the terminal has ended.
+- Retire an old PTY before terminating it, including synchronous Windows exit notifications. Show normal exits, reported failures and unavailable exit statuses separately; never render `code=undefined`. A browser reconnect no longer silently starts a replacement for an ended session.
+- Add two-client geometry, ANSI approval redraw, alternate-screen, pending-write, synchronous-exit and unavailable-exit-status regressions. Update both READMEs with terminal menu interaction and restart instructions.
+
+中文：修复手机与电脑尺寸不一致引起的终端重绘问题；重连恢复服务端当前屏幕；正常结束、异常退出及未知退出状态分别提示；主动重启不再混入旧进程退出消息。真实手机基础输入/输出同步已由用户反馈通过，本次确认菜单残留问题仍需更新后真机复核。
+
 ## 0.2.1 — 2026-10-23
 
 - Default to loopback with public tunnels disabled; remove the author's domain from defaults and examples. Generate a long local credential, require 24+ characters for public mode, and avoid printing credentials or passing tunnel tokens in argv.
