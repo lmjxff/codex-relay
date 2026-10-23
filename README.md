@@ -6,6 +6,14 @@ Follow a local Codex CLI session from your phone browser, send terminal input, a
 
 **Local access only by default. No domain or Cloudflare account is needed to start.** This is an independent community project, not an official OpenAI product.
 
+## Demo
+
+![Codex Relay web UI: send a task, confirm a sample edit, and inspect the Git diff](docs/assets/codex-relay-demo.gif)
+
+A 13-second loop: send terminal input → read the prompt → confirm the sample edit → inspect Git Diff.
+
+Captured from the actual Relay web UI with an isolated sample CLI and Git workspace. Terminal responses are scripted for this demonstration; no live Codex account, access credential, or pairing QR code is shown.
+
 ## Features and boundaries
 
 - Authenticated terminal streaming using node-pty, WebSocket, and xterm.js.
