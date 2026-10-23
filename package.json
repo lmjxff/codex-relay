@@ -1,11 +1,15 @@
 {
   "name": "codex-relay",
-  "version": "0.1.0",
-  "description": "A lightweight mobile-friendly web bridge for remote-controlling local OpenAI Codex CLI with real-time terminal streaming, Git diff viewer, and one-tap approval.",
+  "version": "0.2.0",
+  "description": "A lightweight mobile-friendly web bridge for remote-controlling local OpenAI Codex CLI with Cloudflare Tunnel custom domain, PIN lock, Git diff viewer, and one-tap approval.",
   "main": "dist/index.js",
+  "bin": {
+    "codex-relay": "./dist/index.js"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "cf:login": "tsx src/index.ts --cf-login",
     "build": "tsc",
     "serve": "node dist/index.js"
   },
@@ -15,6 +19,7 @@
     "codex-cli",
     "mobile",
     "remote-control",
+    "cloudflare-tunnel",
     "terminal",
     "node-pty",
     "xterm",
@@ -25,14 +30,18 @@
   "author": "lmjxff",
   "license": "MIT",
   "dependencies": {
+    "cloudflared": "^0.7.0",
     "diff2html": "^3.4.48",
+    "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "node-pty": "^1.0.0",
+    "qrcode-terminal": "^0.12.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",
+    "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.5.13",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
