@@ -377,14 +377,46 @@ wss.on('connection', (ws: WebSocket) => {
 
 function getLocalLanIp(): string {
   const interfaces = os.networkInterfaces();
+  const candidates: { name: string; address: string; score: number }[] = [];
+
   for (const name of Object.keys(interfaces)) {
+    const lowerName = name.toLowerCase();
+    // Skip virtual/proxy/VPN/WSL adapters
+    if (
+      lowerName.includes('mihomo') ||
+      lowerName.includes('clash') ||
+      lowerName.includes('vethernet') ||
+      lowerName.includes('wsl') ||
+      lowerName.includes('docker') ||
+      lowerName.includes('vmware') ||
+      lowerName.includes('virtual') ||
+      lowerName.includes('tun') ||
+      lowerName.includes('tap')
+    ) {
+      continue;
+    }
+
     for (const iface of interfaces[name] || []) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
+      if (iface.family !== 'IPv4' || iface.internal) continue;
+      if (iface.mac === '00:00:00:00:00:00') continue;
+      if (iface.address.startsWith('198.18.') || iface.address.startsWith('169.254.')) continue;
+
+      let score = 10;
+      if (lowerName.includes('wlan') || lowerName.includes('wi-fi') || lowerName.includes('wifi')) {
+        score += 50;
       }
+      if (iface.address.startsWith('192.168.')) {
+        score += 30;
+      } else if (iface.address.startsWith('10.') || iface.address.startsWith('172.')) {
+        score += 10;
+      }
+
+      candidates.push({ name, address: iface.address, score });
     }
   }
-  return '127.0.0.1';
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0]?.address || '127.0.0.1';
 }
 
 if (require.main === module) {
