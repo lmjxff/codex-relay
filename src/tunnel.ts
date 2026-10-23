@@ -4,7 +4,6 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 import { bin as cloudflaredBin, install as installCloudflared } from 'cloudflared';
-import qrcode from 'qrcode-terminal';
 
 const execFileAsync = promisify(execFile);
 
@@ -43,7 +42,7 @@ export function stopActiveTunnel(): void {
 
 async function ensureBinary(): Promise<string> {
   if (!fs.existsSync(cloudflaredBin)) {
-    console.log('⬇️  Downloading cloudflared binary for first-time setup...');
+    console.log('[Cloudflare] Downloading cloudflared binary for first-time setup...');
     await installCloudflared(cloudflaredBin);
   }
   return cloudflaredBin;
@@ -56,7 +55,7 @@ function getCloudflaredCertPath(): string {
 export async function runCloudflaredLogin(): Promise<void> {
   const binPath = await ensureBinary();
   console.log('====================================================');
-  console.log('  🔐 Cloudflare Tunnel 域名授权登录 (lmjjml.cc.cd)');
+  console.log('  Cloudflare Tunnel 域名授权登录 (lmjjml.cc.cd)');
   console.log('  请在弹出的浏览器页面中选择你的域名并点击 Authorize');
   console.log('====================================================');
   const child = spawn(binPath, ['tunnel', 'login'], {
@@ -75,11 +74,10 @@ async function ensureNamedTunnelAndRoute(
   tunnelName: string,
   hostname: string
 ): Promise<void> {
-  // 1. Check if tunnel already exists, otherwise create it
   try {
     await execFileAsync(binPath, ['tunnel', 'info', tunnelName]);
   } catch {
-    console.log(`🔧 Creating Cloudflare named tunnel "${tunnelName}"...`);
+    console.log(`[Cloudflare] Creating named tunnel "${tunnelName}"...`);
     try {
       await execFileAsync(binPath, ['tunnel', 'create', tunnelName]);
     } catch {
@@ -87,8 +85,7 @@ async function ensureNamedTunnelAndRoute(
     }
   }
 
-  // 2. Route custom hostname CNAME to the named tunnel
-  console.log(`🌐 Binding DNS route: https://${hostname} -> tunnel "${tunnelName}"...`);
+  console.log(`[Cloudflare] Routing DNS CNAME: https://${hostname} -> tunnel "${tunnelName}"...`);
   await execFileAsync(binPath, [
     'tunnel',
     'route',
@@ -99,26 +96,32 @@ async function ensureNamedTunnelAndRoute(
   ]);
 }
 
-export function printTunnelBanner(publicUrl: string, authToken: string, modeLabel: string): void {
+export function printTunnelBanner(
+  publicUrl: string,
+  authToken: string,
+  modeLabel: string,
+  localQrPageUrl: string
+): void {
   const magicUrl = `${publicUrl.replace(/\/$/, '')}/?token=${encodeURIComponent(authToken)}`;
   console.log('\n====================================================');
-  console.log(`  🌍 Cloudflare 公网隧道已就绪 (${modeLabel})`);
-  console.log(`  🔗 公网地址 : ${publicUrl}`);
-  console.log(`  🔑 访问密码 : ${authToken}`);
-  console.log(`  ⚡ 免输密直连: ${magicUrl}`);
-  console.log('----------------------------------------------------');
-  console.log('  📱 手机微信/相机扫码一键登录远程控制 (4G/5G 通用)：');
-  qrcode.generate(magicUrl, { small: true });
+  console.log(`  [Cloudflare 公网隧道已就绪] (${modeLabel})`);
+  console.log(`  公网地址   : ${publicUrl}`);
+  console.log(`  访问密码   : ${authToken}`);
+  console.log(`  免输密直连 : ${magicUrl}`);
+  console.log(`  高清二维码 : ${localQrPageUrl} (已在浏览器自动生成清晰二维码)`);
   console.log('====================================================\n');
 }
 
-export async function startCloudflareTunnel(options: TunnelOptions): Promise<ActiveTunnel> {
+export async function startCloudflareTunnel(
+  options: TunnelOptions & { localQrPageUrl?: string }
+): Promise<ActiveTunnel> {
   const binPath = await ensureBinary();
   const localTarget = `http://127.0.0.1:${options.port}`;
   const hostname = (options.hostname || 'codex.lmjjml.cc.cd').trim();
   const tunnelName = (options.tunnelName || 'codex-relay').trim();
   const tunnelToken = (options.tunnelToken || '').trim();
   const certPath = getCloudflaredCertPath();
+  const qrPageUrl = options.localQrPageUrl || `http://localhost:${options.port}/qr`;
 
   stopActiveTunnel();
 
@@ -127,12 +130,22 @@ export async function startCloudflareTunnel(options: TunnelOptions): Promise<Act
     const publicUrl = `https://${hostname}`;
     const child = spawn(
       binPath,
-      ['tunnel', '--no-autoupdate', 'run', '--token', tunnelToken, '--url', localTarget],
+      [
+        'tunnel',
+        '--no-autoupdate',
+        '--protocol',
+        'http2',
+        'run',
+        '--token',
+        tunnelToken,
+        '--url',
+        localTarget,
+      ],
       { stdio: ['ignore', 'pipe', 'pipe'] }
     );
     activeTunnelProcess = child;
 
-    printTunnelBanner(publicUrl, options.authToken, `自定义域名 Token 模式: ${hostname}`);
+    printTunnelBanner(publicUrl, options.authToken, `自定义域名 Token 模式: ${hostname}`, qrPageUrl);
     return {
       url: publicUrl,
       mode: 'custom-token',
@@ -148,12 +161,21 @@ export async function startCloudflareTunnel(options: TunnelOptions): Promise<Act
       const publicUrl = `https://${hostname}`;
       const child = spawn(
         binPath,
-        ['tunnel', '--no-autoupdate', 'run', '--url', localTarget, tunnelName],
+        [
+          'tunnel',
+          '--no-autoupdate',
+          '--protocol',
+          'http2',
+          'run',
+          '--url',
+          localTarget,
+          tunnelName,
+        ],
         { stdio: ['ignore', 'pipe', 'pipe'] }
       );
       activeTunnelProcess = child;
 
-      printTunnelBanner(publicUrl, options.authToken, `专属域名绑定: ${hostname}`);
+      printTunnelBanner(publicUrl, options.authToken, `专属域名绑定: ${hostname}`, qrPageUrl);
       return {
         url: publicUrl,
         mode: 'custom-cert',
@@ -162,23 +184,23 @@ export async function startCloudflareTunnel(options: TunnelOptions): Promise<Act
       };
     } catch (err: any) {
       console.warn(
-        `⚠️  无法自动绑定自定义域名 ${hostname} (${err?.message || '未知错误'})，自动回退至临时公网隧道...`
+        `[Cloudflare] 无法自动绑定自定义域名 ${hostname} (${err?.message || '未知错误'})，自动回退至临时公网隧道...`
       );
     }
   } else if (hostname) {
-    console.log(
-      `💡 提示: 尚未检测到 Cloudflare 授权证书 (~/.cloudflared/cert.pem)。`
-    );
-    console.log(
-      `   如需启用固定域名 https://${hostname}，可运行一次: npm run cf:login`
-    );
+    console.log(`[Cloudflare] 尚未检测到授权证书 (~/.cloudflared/cert.pem)。`);
+    console.log(`   如需启用固定域名 https://${hostname}，可运行一次: npm run cf:login`);
     console.log('   正在为你自动启动免配置 Cloudflare 临时公网隧道...');
   }
 
   // Mode 3: Quick Tunnel (trycloudflare.com)
-  const child = spawn(binPath, ['tunnel', '--no-autoupdate', '--url', localTarget], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const child = spawn(
+    binPath,
+    ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', localTarget],
+    {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }
+  );
   activeTunnelProcess = child;
 
   const publicUrl = await new Promise<string>((resolve, reject) => {
@@ -205,7 +227,7 @@ export async function startCloudflareTunnel(options: TunnelOptions): Promise<Act
     });
   });
 
-  printTunnelBanner(publicUrl, options.authToken, 'Quick Tunnel 临时公网域名');
+  printTunnelBanner(publicUrl, options.authToken, 'Quick Tunnel 临时公网域名', qrPageUrl);
 
   return {
     url: publicUrl,

@@ -7,19 +7,28 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import readline from 'readline';
-import { execFile } from 'child_process';
+import { execFile, execFileSync, spawn } from 'child_process';
 import { promisify } from 'util';
 import { Duplex } from 'stream';
 import * as pty from 'node-pty';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as Diff2Html from 'diff2html';
-import qrcode from 'qrcode-terminal';
+import QRCode from 'qrcode';
 import {
   startCloudflareTunnel,
   stopActiveTunnel,
   runCloudflaredLogin,
   ActiveTunnel,
 } from './tunnel';
+
+// Switch Windows console to UTF-8 so Chinese & symbols render cleanly
+if (os.platform() === 'win32') {
+  try {
+    execFileSync('chcp', ['65001'], { stdio: 'ignore' });
+  } catch {
+    // ignore
+  }
+}
 
 dotenv.config();
 
@@ -31,6 +40,7 @@ const TARGET_CWD = path.resolve(process.env.CODEX_CWD || process.cwd());
 const CODEX_CMD = process.env.CODEX_CMD || 'codex';
 const AUTO_START_CODEX = process.env.AUTO_START_CODEX !== 'false';
 const ENABLE_TUNNEL = process.env.ENABLE_TUNNEL !== 'false';
+const AUTO_OPEN_QR = process.env.AUTO_OPEN_QR !== 'false';
 const CF_HOSTNAME = process.env.CF_HOSTNAME || 'codex.lmjjml.cc.cd';
 const CF_TUNNEL_NAME = process.env.CF_TUNNEL_NAME || 'codex-relay';
 const CF_TUNNEL_TOKEN = process.env.CF_TUNNEL_TOKEN || '';
@@ -55,6 +65,14 @@ function getClientIp(req: IncomingMessage | Request): string {
   return req.socket?.remoteAddress || 'unknown';
 }
 
+function isLocalhostRequest(req: IncomingMessage | Request): boolean {
+  if (req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']) {
+    return false;
+  }
+  const addr = req.socket?.remoteAddress || '';
+  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+}
+
 function isIpBlocked(ip: string): boolean {
   const rec = ipRateMap.get(ip);
   if (!rec) return false;
@@ -70,7 +88,7 @@ function recordAuthFailure(ip: string): void {
   rec.failures += 1;
   if (rec.failures >= MAX_AUTH_FAILURES) {
     rec.blockedUntil = Date.now() + BLOCK_DURATION_MS;
-    console.warn(`🚫 [Security] IP ${ip} blocked for 5 minutes due to repeated failed PIN attempts.`);
+    console.warn(`[Security] IP ${ip} blocked for 5 minutes due to repeated failed PIN attempts.`);
   }
   ipRateMap.set(ip, rec);
 }
@@ -109,13 +127,11 @@ async function ensureAuthTokenConfigured(): Promise<string> {
   if (AUTH_TOKEN) return AUTH_TOKEN;
 
   const envPath = path.join(process.cwd(), '.env');
-  // Check if CLI arg --pin <value> was passed
   const pinArgIdx = process.argv.indexOf('--pin');
   if (pinArgIdx !== -1 && process.argv[pinArgIdx + 1]) {
     AUTH_TOKEN = process.argv[pinArgIdx + 1].trim();
   }
 
-  // If running in interactive terminal and not under watch/non-TTY, prompt once with a 6s timeout fallback
   if (!AUTH_TOKEN && process.stdin.isTTY && !process.env.TSX_WATCH_PROCESS) {
     const defaultPin = String(crypto.randomInt(100000, 999999));
     AUTH_TOKEN = await new Promise<string>((resolve) => {
@@ -125,12 +141,12 @@ async function ensureAuthTokenConfigured(): Promise<string> {
       });
       const timer = setTimeout(() => {
         rl.close();
-        console.log(`\n⏱️  未输入，已自动生成 6 位安全访问 PIN 码: ${defaultPin}`);
+        console.log(`\n[安全设置] 未输入，已自动生成 6 位安全访问 PIN 码: ${defaultPin}`);
         resolve(defaultPin);
       }, 8000);
 
       rl.question(
-        `\n🔐 首次启动安全设置 — 请输入自定义访问密码/PIN 码 (直接回车或等待 8 秒将自动使用 [${defaultPin}]): `,
+        `\n[安全设置] 请输入自定义访问密码/PIN 码 (直接回车或等待 8 秒自动使用 [${defaultPin}]): `,
         (answer) => {
           clearTimeout(timer);
           rl.close();
@@ -145,7 +161,6 @@ async function ensureAuthTokenConfigured(): Promise<string> {
     AUTH_TOKEN = String(crypto.randomInt(100000, 999999));
   }
 
-  // Persist to .env so restarts keep the same PIN
   try {
     let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
     if (!envContent.includes('RELAY_AUTH_TOKEN=')) {
@@ -155,10 +170,10 @@ async function ensureAuthTokenConfigured(): Promise<string> {
         envContent += `CF_HOSTNAME=${CF_HOSTNAME}\n`;
       }
       fs.writeFileSync(envPath, envContent, 'utf8');
-      console.log(`💾 已将访问密码保存至配置文件: ${envPath}`);
+      console.log(`[安全设置] 已将访问密码保存至配置文件: ${envPath}`);
     }
   } catch {
-    // ignore write error if read-only fs
+    // ignore write error
   }
 
   return AUTH_TOKEN;
@@ -347,6 +362,100 @@ async function buildUntrackedPatch(relPath: string): Promise<string> {
   }
 }
 
+async function buildQrPayload() {
+  const lanIp = getLocalLanIp();
+  const publicBaseUrl = activeTunnel?.url || `https://${CF_HOSTNAME}`;
+  const publicMagicUrl = `${publicBaseUrl.replace(/\/$/, '')}/?token=${encodeURIComponent(AUTH_TOKEN)}`;
+  const lanMagicUrl = `http://${lanIp}:${PORT}/?token=${encodeURIComponent(AUTH_TOKEN)}`;
+
+  const [publicQrSvg, lanQrSvg] = await Promise.all([
+    QRCode.toString(publicMagicUrl, {
+      type: 'svg',
+      margin: 2,
+      width: 260,
+      color: { dark: '#0d1117', light: '#ffffff' },
+    }),
+    QRCode.toString(lanMagicUrl, {
+      type: 'svg',
+      margin: 2,
+      width: 260,
+      color: { dark: '#0d1117', light: '#ffffff' },
+    }),
+  ]);
+
+  return {
+    pin: AUTH_TOKEN,
+    publicBaseUrl,
+    publicMagicUrl,
+    publicQrSvg,
+    lanBaseUrl: `http://${lanIp}:${PORT}`,
+    lanMagicUrl,
+    lanQrSvg,
+  };
+}
+
+// Localhost-only or authenticated standalone HD QR Code page
+app.get('/qr', async (req: Request, res: Response) => {
+  const token = extractTokenFromRequest(req);
+  if (!isLocalhostRequest(req) && !verifyAuthToken(token)) {
+    res.redirect('/');
+    return;
+  }
+  const qr = await buildQrPayload();
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Codex Relay — 手机扫码连接</title>
+  <style>
+    body { margin:0; background:#0d1117; color:#f0f6fc; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:20px; box-sizing:border-box; }
+    .container { max-width:760px; width:100%; background:#161b22; border:1px solid #30363d; border-radius:18px; padding:28px; box-shadow:0 20px 50px rgba(0,0,0,0.6); }
+    h1 { margin:0 0 8px; font-size:1.4rem; text-align:center; }
+    .sub { color:#8b949e; font-size:0.9rem; text-align:center; margin-bottom:22px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:20px; }
+    .card { background:#0d1117; border:1px solid #30363d; border-radius:14px; padding:20px; text-align:center; }
+    .badge { display:inline-block; padding:4px 12px; border-radius:999px; font-size:0.78rem; font-weight:700; margin-bottom:12px; }
+    .badge.pub { background:rgba(63,185,80,0.18); color:#3fb950; border:1px solid rgba(63,185,80,0.4); }
+    .badge.lan { background:rgba(88,166,255,0.18); color:#58a6ff; border:1px solid rgba(88,166,255,0.4); }
+    .qr-box { background:#fff; padding:12px; border-radius:12px; display:inline-block; margin-bottom:12px; }
+    .qr-box svg { display:block; width:220px; height:220px; }
+    .url { font-family:monospace; font-size:0.78rem; color:#58a6ff; word-break:break-all; margin:8px 0; }
+    .tip { font-size:0.76rem; color:#8b949e; line-height:1.45; }
+    .footer { margin-top:22px; text-align:center; display:flex; flex-direction:column; gap:10px; align-items:center; }
+    .pin-box { background:#21262d; border:1px solid #30363d; padding:8px 18px; border-radius:10px; font-size:0.95rem; }
+    .pin-box strong { color:#3fb950; font-family:monospace; font-size:1.15rem; letter-spacing:2px; }
+    .btn { display:inline-block; background:#58a6ff; color:#090d12; font-weight:700; text-decoration:none; padding:10px 22px; border-radius:10px; font-size:0.92rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📱 手机扫码远程控制 Codex CLI</h1>
+    <p class="sub">直接用手机相机、浏览器或微信扫一扫下方高清二维码，免输密码一键登录</p>
+    <div class="grid">
+      <div class="card">
+        <span class="badge pub">🌍 外网 4G/5G 远程连接 (Cloudflare)</span>
+        <div class="qr-box">${qr.publicQrSvg}</div>
+        <div class="url">${qr.publicMagicUrl}</div>
+        <div class="tip">适合出门在外使用手机 5G 流量访问。<br/>注：国内移动网络访问 Cloudflare 若遇阻断，请在手机开启代理。</div>
+      </div>
+      <div class="card">
+        <span class="badge lan">📶 同一 Wi-Fi 局域网秒连 (零延迟)</span>
+        <div class="qr-box">${qr.lanQrSvg}</div>
+        <div class="url">${qr.lanMagicUrl}</div>
+        <div class="tip">适合在家/办公室同一 Wi-Fi 下使用。<br/>无需经过外网中转，速度最快、100% 稳定直连。</div>
+      </div>
+    </div>
+    <div class="footer">
+      <div class="pin-box">当前访问密码 (PIN): <strong>${qr.pin}</strong></div>
+      <a class="btn" href="/?token=${encodeURIComponent(qr.pin)}">进入电脑端 Web 控制台 →</a>
+    </div>
+  </div>
+</body>
+</html>`);
+});
+
 // Public Auth Verification Endpoint (Protected by Brute-Force Limiter)
 app.post('/api/auth/verify', (req: Request, res: Response) => {
   const clientIp = getClientIp(req);
@@ -361,7 +470,7 @@ app.post('/api/auth/verify', (req: Request, res: Response) => {
   const candidate = req.body?.token || extractTokenFromRequest(req);
   if (!verifyAuthToken(candidate)) {
     recordAuthFailure(clientIp);
-    console.warn(`⚠️  [Security] Rejected invalid login attempt from IP: ${clientIp}`);
+    console.warn(`[Security] Rejected invalid login attempt from IP: ${clientIp}`);
     res.status(401).json({
       ok: false,
       error: '访问密码 / Token 错误，请重新输入',
@@ -398,6 +507,15 @@ function requireApiAuth(req: Request, res: Response, next: NextFunction): void {
 }
 
 app.use('/api', requireApiAuth);
+
+app.get('/api/qr', async (_req: Request, res: Response) => {
+  try {
+    const payload = await buildQrPayload();
+    res.json({ ok: true, ...payload });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to generate QR code' });
+  }
+});
 
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
@@ -530,7 +648,7 @@ server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) =>
     }
 
     if (isIpBlocked(clientIp)) {
-      console.warn(`🚫 [Security] Blocked WebSocket upgrade from rate-limited IP: ${clientIp}`);
+      console.warn(`[Security] Blocked WebSocket upgrade from rate-limited IP: ${clientIp}`);
       socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
@@ -539,7 +657,7 @@ server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) =>
     const token = extractTokenFromRequest(request);
     if (!verifyAuthToken(token)) {
       recordAuthFailure(clientIp);
-      console.warn(`🚫 [Security] Rejected unauthorized WebSocket connection from IP: ${clientIp}`);
+      console.warn(`[Security] Rejected unauthorized WebSocket connection from IP: ${clientIp}`);
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
@@ -557,7 +675,7 @@ server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) =>
 wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
   const clientIp = getClientIp(request);
   clients.add(ws);
-  console.log(`✅ [WebSocket] Authenticated client connected (${clientIp}), active=${clients.size}`);
+  console.log(`[WebSocket] Authenticated client connected (${clientIp}), active=${clients.size}`);
 
   if (!ptyProcess) {
     spawnCodexPty();
@@ -659,12 +777,26 @@ function getLocalLanIp(): string {
   return candidates[0]?.address || '127.0.0.1';
 }
 
+function openUrlInBrowser(url: string): void {
+  try {
+    if (os.platform() === 'win32') {
+      spawn('cmd.exe', ['/c', 'start', '', url], { stdio: 'ignore', detached: true }).unref();
+    } else if (os.platform() === 'darwin') {
+      spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
+    } else {
+      spawn('xdg-open', [url], { stdio: 'ignore', detached: true }).unref();
+    }
+  } catch {
+    // ignore browser launch errors
+  }
+}
+
 // Strict Lifecycle Binding: Destroy Cloudflare Tunnel & PTY immediately on exit
 let isShuttingDown = false;
 function gracefulShutdown(reason: string): void {
   if (isShuttingDown) return;
   isShuttingDown = true;
-  console.log(`\n🛑 [Lifecycle] 正在关闭 Codex Relay (${reason})，销毁公网隧道与终端进程...`);
+  console.log(`\n[Lifecycle] 正在关闭 Codex Relay (${reason})，销毁公网隧道与终端进程...`);
 
   stopActiveTunnel();
 
@@ -720,14 +852,16 @@ async function bootstrap(): Promise<void> {
   server.listen(PORT, HOST, async () => {
     const lanIp = getLocalLanIp();
     const lanMagicUrl = `http://${lanIp}:${PORT}/?token=${encodeURIComponent(AUTH_TOKEN)}`;
+    const localQrPageUrl = `http://localhost:${PORT}/qr`;
 
     console.log('====================================================');
-    console.log('  🚀 Codex Relay — Mobile Codex CLI Bridge');
-    console.log(`  📂 Workspace   : ${TARGET_CWD}`);
-    console.log(`  🤖 Command     : ${CODEX_CMD}`);
-    console.log(`  🔑 Access PIN  : ${AUTH_TOKEN}`);
-    console.log(`  💻 Local URL   : http://localhost:${PORT}/?token=${encodeURIComponent(AUTH_TOKEN)}`);
-    console.log(`  📱 Wi-Fi URL   : ${lanMagicUrl}`);
+    console.log('  Codex Relay — Mobile Codex CLI Bridge');
+    console.log(`  Workspace   : ${TARGET_CWD}`);
+    console.log(`  Command     : ${CODEX_CMD}`);
+    console.log(`  Access PIN  : ${AUTH_TOKEN}`);
+    console.log(`  Local URL   : http://localhost:${PORT}/?token=${encodeURIComponent(AUTH_TOKEN)}`);
+    console.log(`  Wi-Fi URL   : ${lanMagicUrl}`);
+    console.log(`  高清扫码页面 : ${localQrPageUrl}`);
     console.log('====================================================');
 
     if (ENABLE_TUNNEL) {
@@ -738,15 +872,15 @@ async function bootstrap(): Promise<void> {
           hostname: CF_HOSTNAME,
           tunnelName: CF_TUNNEL_NAME,
           tunnelToken: CF_TUNNEL_TOKEN,
+          localQrPageUrl,
         });
       } catch (err: any) {
-        console.error(`⚠️  Cloudflare Tunnel 启动失败: ${err?.message || err}`);
-        console.log('📱 局域网 Wi-Fi 扫码直连：');
-        qrcode.generate(lanMagicUrl, { small: true });
+        console.error(`[Cloudflare] 隧道启动失败: ${err?.message || err}`);
       }
-    } else {
-      console.log('📱 局域网 Wi-Fi 扫码直连：');
-      qrcode.generate(lanMagicUrl, { small: true });
+    }
+
+    if (AUTO_OPEN_QR) {
+      openUrlInBrowser(localQrPageUrl);
     }
   });
 }
