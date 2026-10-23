@@ -186,6 +186,7 @@ WebSocket outputs include `status`, `history`, `output`. Send `{ "type": "input"
 | Symptom | Check |
 | --- | --- |
 | Native install fails | Use Node 22/24. Source builds need Python and C++ tools: Visual Studio Build Tools on Windows, Command Line Tools on macOS, make/G++ on Linux. See [node-pty prerequisites](https://github.com/microsoft/node-pty#dependencies). |
+| macOS reports `posix_spawnp failed` | Relay repairs missing execute bits on node-pty's known helper files at startup ([upstream defect](https://github.com/microsoft/node-pty/issues/919)). Install dependencies under your own user so they are writable; check shell/workspace paths if the error persists. |
 | `codex` missing in terminal | Check the host user's PATH, CLI installation/sign-in, and `CODEX_CMD`. Run locally first. |
 | Git status fails | Check Git installation, permissions, and that `CODEX_CWD` is a Git working tree. |
 | LAN phone cannot connect | Check `HOST`, LAN IP, firewall, same network, and Wi-Fi client isolation. |

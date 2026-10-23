@@ -2,7 +2,8 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {execFile}=require('node:child_process');
 const {promisify}=require('node:util');
-const {fixture,cleanup}=require('./helpers.cjs');
+const path=require('node:path');
+const {fixture,cleanup,project}=require('./helpers.cjs');
 
 test('native PTY starts a harmless local command and reports its exit',{timeout:20000},async()=>{
   const directory=fixture();
@@ -11,6 +12,7 @@ test('native PTY starts a harmless local command and reports its exit',{timeout:
     // An isolated owner exits explicitly after verifying output and exit code.
     const script=`
       const pty=require(process.argv[2]);
+      require(process.argv[3]).preparePtyRuntime();
       const windows=process.platform==='win32';
       const shell=windows?require('node:path').join(process.env.SystemRoot,'System32','cmd.exe'):'/bin/sh';
       const args=windows?['/d','/c','echo relay-native-smoke']:['-c','printf relay-native-smoke'];
@@ -21,7 +23,7 @@ test('native PTY starts a harmless local command and reports its exit',{timeout:
       proc.onExit(event=>{const ok=event.exitCode===0&&output.includes('relay-native-smoke');process.stdout.write(ok?'smoke-ok':'smoke-failed',()=>process.exit(ok?0:1));});
       setTimeout(()=>process.exit(2),10000);
     `;
-    const {stdout}=await promisify(execFile)(process.execPath,['-e',script,directory,require.resolve('node-pty')],{timeout:15000,windowsHide:true});
+    const {stdout}=await promisify(execFile)(process.execPath,['-e',script,directory,require.resolve('node-pty'),path.join(project,'dist','pty-setup.js')],{timeout:15000,windowsHide:true});
     assert.equal(stdout,'smoke-ok');
   } finally { cleanup(directory); }
 });

@@ -6,6 +6,7 @@
 - Advertise public QR codes only after tunnel registration; handle early exit, timeout and later tunnel exit. Preserve DNS records unless overwrite is explicitly enabled.
 - Ignore direct-client forwarded IP headers, validate the local QR bypass and WebSocket origins, bound frames/input, and serve browser assets locally.
 - Protect replacement PTYs from stale exit/data callbacks. Retain unsent prompts, acknowledge writes, deduplicate recent prompt IDs and replace history on reconnect.
+- Repair missing macOS spawn-helper execute bits in node-pty 1.1.0 before starting a terminal; verify an actual PTY command on all CI platforms.
 - Parse NUL-delimited Git status, show new-directory/Unicode paths, resolve repository roots and report omitted previews instead of a false clean state.
 - Add English/Chinese setup, migration, configuration and security documentation, regression tests and a Windows/macOS/Linux CI matrix on Node 22/24.
 

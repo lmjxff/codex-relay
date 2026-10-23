@@ -14,6 +14,7 @@ import QRCode from 'qrcode';
 import { AuthRateLimiter, createAuthToken, escapeHtml, getClientIp as resolveClientIp, isLocalhostRequest, verifyToken } from './security';
 import { readGitDiff, readGitStatus } from './git';
 import { attachPtyLifecycle, terminalSize } from './terminal-lifecycle';
+import { preparePtyRuntime } from './pty-setup';
 import {
   startCloudflareTunnel,
   stopActiveTunnel,
@@ -185,6 +186,7 @@ function spawnCodexPty(cols = 80, rows = 24): pty.IPty {
   }
 
   const { shell, args } = resolveDefaultShell();
+  preparePtyRuntime();
   const terminalEnv: Record<string, string> = { ...(process.env as Record<string, string>), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
   delete terminalEnv.RELAY_AUTH_TOKEN;
   delete terminalEnv.RELAY_PIN;

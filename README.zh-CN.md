@@ -186,6 +186,7 @@ WebSocket 输出包括 `status`、`history`、`output`。发送 `{ "type": "inpu
 | 现象 | 检查方法 |
 | --- | --- |
 | 原生依赖安装失败 | 使用 Node 22/24。源码编译需要 Python 和 C++ 工具；Windows 安装 Visual Studio Build Tools，macOS 安装 Command Line Tools，Linux 安装 make/G++。参考 [node-pty 依赖说明](https://github.com/microsoft/node-pty#dependencies)。 |
+| macOS 提示 `posix_spawnp failed` | Relay 启动时会修复 node-pty 已知辅助文件缺少执行权限的问题（[上游缺陷](https://github.com/microsoft/node-pty/issues/919)）。依赖应由当前用户安装并可写；仍失败时检查 Shell 和工作区路径。 |
 | 终端提示找不到 `codex` | 检查当前用户 PATH、CLI 安装与登录、`CODEX_CMD`，先在本机执行确认。 |
 | Git 状态失败 | 检查 Git、文件权限，以及 `CODEX_CWD` 是否为 Git 工作区。 |
 | 手机无法连接局域网 | 检查 `HOST`、实际 IP、防火墙、同一网络和 Wi-Fi 客户端隔离。 |
