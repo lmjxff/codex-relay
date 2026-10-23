@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0d1117" />
+    <title>Codex Relay — Mobile Codex CLI Bridge</title>
+
+    <!-- xterm.js CSS -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css"
+    />
+    <!-- diff2html CSS -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/diff2html@3.4.48/bundles/css/diff2html.min.css"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <!-- Top Status Header -->
+      <header class="topbar">
+        <div class="brand">
+          <span class="status-dot" id="ws-dot" title="WebSocket Disconnected"></span>
+          <span class="brand-title">Codex Relay</span>
+          <span class="branch-badge" id="git-branch">main</span>
+        </div>
+        <div class="topbar-actions">
+          <span class="cwd-label" id="cwd-label" title="Workspace Directory">...</span>
+          <button class="icon-btn" id="btn-restart" title="Restart PTY Session">
+            ↻ Restart
+          </button>
+        </div>
+      </header>
+
+      <!-- View Switcher Tabs: Terminal vs Git Diff -->
+      <nav class="tab-bar" role="tablist">
+        <button
+          class="tab-btn active"
+          id="tab-btn-terminal"
+          data-tab="terminal"
+          role="tab"
+          aria-selected="true"
+        >
+          <span>⌨️ Terminal (xterm.js)</span>
+        </button>
+        <button
+          class="tab-btn"
+          id="tab-btn-diff"
+          data-tab="diff"
+          role="tab"
+          aria-selected="false"
+        >
+          <span>🔀 Git Diff</span>
+          <span class="diff-badge" id="diff-count-badge">0</span>
+        </button>
+      </nav>
+
+      <!-- Upper Half: Main Viewport (xterm.js Terminal & Git Diff Red/Green Preview) -->
+      <main class="upper-viewport">
+        <!-- Tab 1: xterm.js Terminal Container -->
+        <section class="tab-panel active" id="panel-terminal" role="tabpanel">
+          <div id="terminal-container" class="terminal-container"></div>
+        </section>
+
+        <!-- Tab 2: Git Diff Preview Container -->
+        <section class="tab-panel" id="panel-diff" role="tabpanel">
+          <div class="diff-toolbar">
+            <div class="file-chips" id="file-chips">
+              <button class="file-chip active" data-file="">All Changes</button>
+            </div>
+            <button class="refresh-diff-btn" id="btn-refresh-diff">⟳ Refresh</button>
+          </div>
+          <div id="diff-container" class="diff-container">
+            <div class="empty-state">Loading Git diff...</div>
+          </div>
+        </section>
+      </main>
+
+      <!-- Lower Half: Thumb Control Zone -->
+      <section class="lower-controls">
+        <!-- Quick Command / Prompt Bar -->
+        <form class="prompt-form" id="prompt-form" autocomplete="off">
+          <input
+            type="text"
+            id="prompt-input"
+            class="prompt-input"
+            placeholder="Send prompt or command to Codex CLI..."
+          />
+          <button type="submit" class="send-btn">Send ↵</button>
+        </form>
+
+        <!-- Auxiliary Terminal Keys -->
+        <div class="quick-keys">
+          <button type="button" class="key-btn" data-action="start_codex">
+            🚀 Run codex
+          </button>
+          <button type="button" class="key-btn" data-action="enter">
+            Enter ↵
+          </button>
+          <button type="button" class="key-btn" data-action="esc">
+            Esc
+          </button>
+          <button type="button" class="key-btn danger-subtle" data-action="ctrl_c">
+            Ctrl+C
+          </button>
+        </div>
+
+        <!-- Giant Thumb Approval Buttons -->
+        <div class="thumb-approval-grid">
+          <button
+            type="button"
+            class="thumb-btn approve-btn"
+            id="btn-approve"
+            data-action="approve"
+          >
+            <span class="thumb-icon">✓</span>
+            <span class="thumb-title">Approve (y)</span>
+            <span class="thumb-subtitle">Accept Codex Change</span>
+          </button>
+
+          <button
+            type="button"
+            class="thumb-btn reject-btn"
+            id="btn-reject"
+            data-action="reject"
+          >
+            <span class="thumb-icon">✕</span>
+            <span class="thumb-title">Reject (n)</span>
+            <span class="thumb-subtitle">Decline &amp; Re-prompt</span>
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <!-- xterm.js & FitAddon scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

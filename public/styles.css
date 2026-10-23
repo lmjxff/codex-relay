@@ -1,0 +1,458 @@
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --border-color: #30363d;
+  --text-primary: #f0f6fc;
+  --text-muted: #8b949e;
+  --accent-blue: #58a6ff;
+  --approve-bg: #238636;
+  --approve-hover: #2ea043;
+  --approve-border: #3fb950;
+  --reject-bg: #da3633;
+  --reject-hover: #f85149;
+  --reject-border: #ff7b72;
+  --diff-add-bg: rgba(46, 160, 67, 0.22);
+  --diff-add-text: #7ee787;
+  --diff-del-bg: rgba(248, 81, 73, 0.22);
+  --diff-del-text: #ffa198;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
+    Arial, sans-serif;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100dvh;
+  max-width: 768px;
+  margin: 0 auto;
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+}
+
+/* Header */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f85149;
+  box-shadow: 0 0 6px rgba(248, 81, 73, 0.6);
+  transition: background-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.status-dot.connected {
+  background: #3fb950;
+  box-shadow: 0 0 8px rgba(63, 185, 80, 0.8);
+}
+
+.brand-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.2px;
+}
+
+.branch-badge {
+  font-size: 0.72rem;
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent-blue);
+  border: 1px solid rgba(88, 166, 255, 0.35);
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cwd-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.icon-btn {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.icon-btn:active {
+  transform: scale(0.96);
+}
+
+/* Tab Navigation */
+.tab-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 8px;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-blue);
+  background: rgba(88, 166, 255, 0.06);
+}
+
+.diff-badge {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.diff-badge.has-changes {
+  background: rgba(210, 153, 34, 0.25);
+  color: #e3b341;
+  border-color: rgba(210, 153, 34, 0.5);
+}
+
+/* Upper Half: Terminal & Diff Viewport */
+.upper-viewport {
+  position: relative;
+  flex: 1 1 54%;
+  min-height: 0;
+  background: #090d12;
+  overflow: hidden;
+}
+
+.tab-panel {
+  display: none;
+  width: 100%;
+  height: 100%;
+}
+
+.tab-panel.active {
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-container {
+  width: 100%;
+  height: 100%;
+  padding: 4px;
+}
+
+/* Git Diff Panel */
+.diff-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.file-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: 1;
+}
+
+.file-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.file-chip {
+  white-space: nowrap;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  cursor: pointer;
+}
+
+.file-chip.active {
+  background: rgba(88, 166, 255, 0.18);
+  color: var(--accent-blue);
+  border-color: var(--accent-blue);
+}
+
+.refresh-diff-btn {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.diff-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  text-align: center;
+  padding: 24px;
+}
+
+/* Dark-themed Red/Green Overrides for diff2html */
+.d2h-wrapper {
+  color: var(--text-primary);
+}
+
+.d2h-file-wrapper {
+  border: 1px solid var(--border-color) !important;
+  border-radius: 8px !important;
+  background: var(--bg-secondary) !important;
+  margin-bottom: 12px !important;
+  overflow: hidden;
+}
+
+.d2h-file-header {
+  background: var(--bg-tertiary) !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  color: var(--text-primary) !important;
+  padding: 6px 10px !important;
+}
+
+.d2h-file-name {
+  color: var(--accent-blue) !important;
+  font-size: 0.82rem !important;
+}
+
+.d2h-code-linenumber,
+.d2h-code-side-linenumber {
+  background: #12171e !important;
+  color: var(--text-muted) !important;
+  border-color: var(--border-color) !important;
+}
+
+.d2h-code-line,
+.d2h-code-side-line {
+  font-size: 0.76rem !important;
+}
+
+.d2h-ins,
+.d2h-ins.d2h-change {
+  background-color: var(--diff-add-bg) !important;
+  border-color: rgba(63, 185, 80, 0.4) !important;
+}
+
+.d2h-ins .d2h-code-line-ctn {
+  color: var(--diff-add-text) !important;
+}
+
+.d2h-del,
+.d2h-del.d2h-change {
+  background-color: var(--diff-del-bg) !important;
+  border-color: rgba(248, 81, 73, 0.4) !important;
+}
+
+.d2h-del .d2h-code-line-ctn {
+  color: var(--diff-del-text) !important;
+}
+
+.d2h-info {
+  background-color: rgba(56, 139, 253, 0.15) !important;
+  color: var(--accent-blue) !important;
+  border-color: var(--border-color) !important;
+}
+
+/* Lower Half: Thumb Zone Controls */
+.lower-controls {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+}
+
+.prompt-form {
+  display: flex;
+  gap: 6px;
+}
+
+.prompt-input {
+  flex: 1;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.prompt-input:focus {
+  border-color: var(--accent-blue);
+}
+
+.send-btn {
+  background: var(--accent-blue);
+  color: #090d12;
+  font-weight: 700;
+  border: none;
+  border-radius: 8px;
+  padding: 0 14px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.quick-keys {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.key-btn {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 6px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.key-btn.danger-subtle {
+  color: #ff7b72;
+  border-color: rgba(248, 81, 73, 0.35);
+}
+
+.key-btn:active {
+  transform: scale(0.96);
+}
+
+/* Giant Thumb Buttons for Approve (y) and Reject (n) */
+.thumb-approval-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.thumb-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 82px;
+  padding: 12px 10px;
+  border-radius: 14px;
+  color: #ffffff;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.1s ease, filter 0.15s ease;
+}
+
+.thumb-btn:active {
+  transform: scale(0.96);
+  filter: brightness(1.12);
+}
+
+.approve-btn {
+  background: linear-gradient(180deg, var(--approve-hover), var(--approve-bg));
+  border: 2px solid var(--approve-border);
+  box-shadow: 0 4px 16px rgba(35, 134, 54, 0.35);
+}
+
+.reject-btn {
+  background: linear-gradient(180deg, var(--reject-hover), var(--reject-bg));
+  border: 2px solid var(--reject-border);
+  box-shadow: 0 4px 16px rgba(218, 54, 51, 0.35);
+}
+
+.thumb-icon {
+  font-size: 1.35rem;
+  font-weight: 900;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.thumb-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+
+.thumb-subtitle {
+  font-size: 0.7rem;
+  opacity: 0.88;
+  margin-top: 2px;
+}
