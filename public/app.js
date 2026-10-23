@@ -1,4 +1,12 @@
 (() => {
+  const STORAGE_KEY = 'codex_relay_auth_token';
+
+  const authOverlay = document.getElementById('auth-overlay');
+  const authForm = document.getElementById('auth-form');
+  const authTokenInput = document.getElementById('auth-token-input');
+  const authError = document.getElementById('auth-error');
+  const btnLock = document.getElementById('btn-lock');
+
   const wsDot = document.getElementById('ws-dot');
   const cwdLabel = document.getElementById('cwd-label');
   const gitBranch = document.getElementById('git-branch');
@@ -15,6 +23,9 @@
   let selectedFile = '';
   let ws = null;
   let reconnectTimer = null;
+  let pollTimer = null;
+  let authToken = '';
+  let isAuthenticated = false;
 
   // Initialize xterm.js terminal
   const term = new window.Terminal({
@@ -37,7 +48,7 @@
   term.open(terminalContainer);
 
   function fitTerminal() {
-    if (activeTab !== 'terminal') return;
+    if (activeTab !== 'terminal' || !isAuthenticated) return;
     try {
       fitAddon.fit();
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -60,7 +71,7 @@
 
   // Forward direct terminal keystrokes to PTY over WebSocket
   term.onData((data) => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (isAuthenticated && ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'input', data }));
     }
   });
@@ -75,19 +86,114 @@
     }
   }
 
+  function showLockScreen(errorMsg = '') {
+    isAuthenticated = false;
+    authOverlay.classList.remove('hidden');
+    authError.textContent = errorMsg;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    if (ws) {
+      try {
+        ws.close();
+      } catch {}
+      ws = null;
+    }
+    wsDot.classList.remove('connected');
+    setTimeout(() => authTokenInput.focus(), 80);
+  }
+
+  async function verifyAndUnlock(candidateToken) {
+    const cleaned = (candidateToken || '').trim();
+    if (!cleaned) {
+      showLockScreen('请输入访问密码 / PIN 码');
+      return false;
+    }
+
+    try {
+      const res = await fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: cleaned }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        localStorage.removeItem(STORAGE_KEY);
+        showLockScreen(data.error || '访问密码校验失败');
+        return false;
+      }
+
+      authToken = cleaned;
+      isAuthenticated = true;
+      localStorage.setItem(STORAGE_KEY, authToken);
+      authError.textContent = '';
+      authOverlay.classList.add('hidden');
+
+      if (data.cwd) {
+        cwdLabel.textContent = data.cwd;
+        cwdLabel.title = data.cwd;
+      }
+
+      connectWebSocket();
+      setTimeout(fitTerminal, 100);
+      refreshGitStatusAndDiff();
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = setInterval(refreshGitStatusAndDiff, 4000);
+      return true;
+    } catch {
+      showLockScreen('网络请求失败，无法验证访问密码');
+      return false;
+    }
+  }
+
+  authForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    hapticFeedback(20);
+    await verifyAndUnlock(authTokenInput.value);
+  });
+
+  btnLock.addEventListener('click', () => {
+    hapticFeedback(30);
+    localStorage.removeItem(STORAGE_KEY);
+    authToken = '';
+    authTokenInput.value = '';
+    term.clear();
+    showLockScreen('已安全锁定终端');
+  });
+
+  function authFetch(url, options = {}) {
+    const headers = Object.assign({}, options.headers || {}, {
+      'x-relay-token': authToken,
+    });
+    return fetch(url, Object.assign({}, options, { headers })).then((res) => {
+      if (res.status === 401) {
+        localStorage.removeItem(STORAGE_KEY);
+        showLockScreen('会话已过期或密码已更改，请重新输入');
+      }
+      return res;
+    });
+  }
+
   function connectWebSocket() {
+    if (!isAuthenticated || !authToken) return;
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    const wsUrl = `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(authToken)}`;
     ws = new WebSocket(wsUrl);
 
     ws.addEventListener('open', () => {
       wsDot.classList.add('connected');
-      wsDot.title = 'WebSocket Connected';
+      wsDot.title = 'WebSocket Connected (Authenticated)';
       setTimeout(fitTerminal, 80);
     });
 
@@ -110,7 +216,9 @@
     ws.addEventListener('close', () => {
       wsDot.classList.remove('connected');
       wsDot.title = 'Disconnected — Reconnecting...';
-      reconnectTimer = setTimeout(connectWebSocket, 1800);
+      if (isAuthenticated) {
+        reconnectTimer = setTimeout(connectWebSocket, 2000);
+      }
     });
 
     ws.addEventListener('error', () => {
@@ -119,11 +227,12 @@
   }
 
   function sendAction(action) {
+    if (!isAuthenticated) return;
     hapticFeedback(action === 'approve' || action === 'reject' ? [30, 40, 30] : 20);
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'action', action }));
     } else {
-      fetch('/api/action', {
+      authFetch('/api/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
@@ -143,6 +252,7 @@
   // Prompt bar submission
   promptForm.addEventListener('submit', (e) => {
     e.preventDefault();
+    if (!isAuthenticated) return;
     const text = promptInput.value;
     if (!text.trim()) return;
     hapticFeedback(20);
@@ -157,6 +267,7 @@
 
   // Restart PTY session
   btnRestart.addEventListener('click', () => {
+    if (!isAuthenticated) return;
     hapticFeedback(35);
     term.clear();
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -198,8 +309,10 @@
 
   // Git Status & Diff fetching
   async function refreshGitStatusAndDiff() {
+    if (!isAuthenticated) return;
     try {
-      const statusRes = await fetch('/api/git/status');
+      const statusRes = await authFetch('/api/git/status');
+      if (!statusRes.ok) return;
       const statusData = await statusRes.json();
 
       if (statusData.ok) {
@@ -254,9 +367,11 @@
   }
 
   async function loadDiffHtml(fileFilter) {
+    if (!isAuthenticated) return;
     try {
       const query = fileFilter ? `?file=${encodeURIComponent(fileFilter)}` : '';
-      const res = await fetch(`/api/git/diff${query}`);
+      const res = await authFetch(`/api/git/diff${query}`);
+      if (!res.ok) return;
       const data = await res.json();
 
       if (!data.ok) {
@@ -282,9 +397,24 @@
     refreshGitStatusAndDiff();
   });
 
-  // Boot
-  connectWebSocket();
-  setTimeout(fitTerminal, 120);
-  refreshGitStatusAndDiff();
-  setInterval(refreshGitStatusAndDiff, 4000);
+  // Boot: Check URL ?token=... (from QR scan) or saved token in localStorage
+  (async function initAuth() {
+    const params = new URLSearchParams(window.location.search);
+    const urlToken = params.get('token');
+    if (urlToken) {
+      // Strip ?token= from address bar immediately for security
+      const cleanUrl = window.location.pathname + window.location.hash;
+      window.history.replaceState({}, document.title, cleanUrl);
+      const ok = await verifyAndUnlock(urlToken);
+      if (ok) return;
+    }
+
+    const savedToken = localStorage.getItem(STORAGE_KEY);
+    if (savedToken) {
+      const ok = await verifyAndUnlock(savedToken);
+      if (ok) return;
+    }
+
+    showLockScreen();
+  })();
 })();

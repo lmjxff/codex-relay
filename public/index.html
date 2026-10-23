@@ -22,6 +22,31 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <!-- Security Lock Screen Overlay (PIN / Token Gate) -->
+    <div class="auth-overlay" id="auth-overlay">
+      <div class="auth-card">
+        <div class="auth-lock-icon">🔒</div>
+        <h1 class="auth-title">Codex Relay 安全锁</h1>
+        <p class="auth-desc">
+          请输入终端显示的访问密码 (PIN / Token)，或直接用手机扫描终端二维码一键解锁。
+        </p>
+        <form id="auth-form" class="auth-form" autocomplete="off">
+          <input
+            type="password"
+            id="auth-token-input"
+            class="auth-input"
+            placeholder="输入访问密码 / PIN 码"
+            inputmode="text"
+            required
+          />
+          <div class="auth-error" id="auth-error"></div>
+          <button type="submit" class="auth-submit-btn" id="auth-submit-btn">
+            解锁进入终端 →
+          </button>
+        </form>
+      </div>
+    </div>
+
     <div class="app-shell">
       <!-- Top Status Header -->
       <header class="topbar">
@@ -34,6 +59,9 @@
           <span class="cwd-label" id="cwd-label" title="Workspace Directory">...</span>
           <button class="icon-btn" id="btn-restart" title="Restart PTY Session">
             ↻ Restart
+          </button>
+          <button class="icon-btn" id="btn-lock" title="Lock & Logout">
+            🔒
           </button>
         </div>
       </header>
