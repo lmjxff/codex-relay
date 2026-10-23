@@ -1,0 +1,207 @@
+# Codex Relay
+
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+用手机浏览器查看电脑上运行的 Codex CLI，发送终端输入，并预览 Git 改动。项目提供一个共享终端、适合手机的输入栏、代码差异预览，以及可选的 Cloudflare Tunnel 连接。
+
+**默认只允许本机访问，启动不需要域名或 Cloudflare 账号。** 本项目由社区独立开发，并非 OpenAI 官方产品。
+
+## 功能与边界
+
+- 使用 node-pty、WebSocket 和 xterm.js，在通过鉴权的浏览器中查看、操作本地终端。
+- 输入栏在收到服务端写入终端的确认前保留草稿；不确定是否送达时，重试沿用消息 ID，减少重复输入。
+- 预览暂存区、工作区和未跟踪文件，包括新建目录中的文件与中文文件名。
+- 本地配对页只为已启用的局域网入口或已连接的公网隧道生成二维码。
+- 浏览器脚本和样式从本机提供，无需第三方 CDN。
+- 可选临时公网地址、自有域名或 Cloudflare 后台管理的隧道 Token。
+
+**Approve (y)** / **Reject (n)** 实际发送的是 `y` / `n` 加回车，作用于终端当前运行的程序。它们是终端快捷键，**没有绑定具体的 Codex 审批请求**。点击前请先读清终端提示。
+
+## 环境要求
+
+- Node.js 22 或 24、npm，以及能在 `PATH` 中找到的 Git。
+- 电脑上单独安装、登录 Codex CLI。先确认 `codex --version` 正常，并能在本机运行会话，参考 [Codex CLI 官方说明](https://developers.openai.com/codex/cli)。
+- 支持 ConPTY 的 Windows、macOS 或 Linux。原生依赖 `node-pty` 可能需要系统编译工具。
+- 使用公网隧道时，需要 cloudflared 能连接 Cloudflare；使用自定义域名时，域名必须属于你可授权的 Cloudflare 账号。
+
+## 快速开始：先在电脑上使用
+
+```bash
+git clone https://github.com/lmjxff/codex-relay.git
+cd codex-relay
+npm ci
+```
+
+复制配置文件：
+
+```powershell
+# Windows PowerShell
+Copy-Item .env.example .env
+```
+
+```bash
+# macOS / Linux
+cp .env.example .env
+```
+
+在本地 `.env` 中设置 `CODEX_CWD`，指向你要操作的项目绝对路径，例如 `C:/work/my-project` 或 `/home/me/my-project`。不设置时，默认使用启动 Relay 时所在的目录。
+
+```bash
+npm start
+```
+
+首次启动时，空的 `RELAY_AUTH_TOKEN` 会被替换为随机生成的 256 位访问凭据，保存到本地 `.env`。浏览器会打开 [本机配对页面](http://localhost:3210/qr)，点击页面上的电脑端控制台链接即可进入，也可以在登录页手动输入凭据。控制台不会打印凭据。
+
+默认 `HOST=127.0.0.1`、`ENABLE_TUNNEL=false`，仅允许这台电脑连接，不生成局域网或公网二维码。使用期间保持进程运行，在电脑终端按 Ctrl+C 停止 Relay。
+
+需要运行编译产物时，先执行 `npm run build`，再执行 `npm run serve`。`npm run dev` 用于源码热重载。以上流程从 Git 仓库运行，不依赖已发布的 npm 包。
+
+## 用手机连接
+
+选择一种方式，修改**本地 `.env`** 后重启。你自己的域名只需放在本地配置中，无需写进公开的示例文件或 README。
+
+### 同一个可信 Wi-Fi
+
+```dotenv
+HOST=0.0.0.0
+ENABLE_TUNNEL=false
+```
+
+在电脑打开 `http://localhost:3210/qr`，扫描局域网二维码。为可信专用网络放行电脑防火墙中的对应端口。手机、电脑需要互通，访客 Wi-Fi 或客户端隔离可能阻止连接。局域网 HTTP 不加密，只在可信网络中使用。
+
+电脑有多个网卡时，程序自动选择的 IP 可能不正确。可在手机手动打开 `http://你的局域网IP:3210/`，再输入访问凭据。
+
+### 临时公网地址：无需域名
+
+```dotenv
+HOST=127.0.0.1
+ENABLE_TUNNEL=true
+CF_HOSTNAME=
+CF_TUNNEL_TOKEN=
+```
+
+保留程序生成的长访问凭据。只有同时获得 `*.trycloudflare.com` 地址、收到隧道连接注册成功消息后，Relay 才会提供公网二维码。刷新本地 `/qr` 页面后扫码。临时地址可能每次启动都变化。
+
+cloudflared 可能在安装依赖时或第一次使用隧道时下载。隧道启动失败时，本机入口仍可使用。公网可达性取决于网络和 Cloudflare，不保证任何网络都能连通。参考 [Cloudflare Quick Tunnels](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)。
+
+### 自有域名：证书授权方式
+
+先授权你拥有的 Cloudflare 域名：
+
+```bash
+npm run cf:login
+```
+
+再配置：
+
+```dotenv
+HOST=127.0.0.1
+ENABLE_TUNNEL=true
+CF_HOSTNAME=codex.example.com
+CF_TUNNEL_NAME=codex-relay
+CF_TUNNEL_TOKEN=
+CF_OVERWRITE_DNS=false
+```
+
+将 `codex.example.com` 替换为**你自己的主机名**，不带 `https://`、端口或路径。授权证书通常保存在 `~/.cloudflared/cert.pem`。Relay 会创建或复用命名隧道，并创建对应 DNS 路由；这种方式会修改你的 Cloudflare 隧道和 DNS 配置。
+
+默认不覆盖已有 DNS 记录。遇到冲突时，先自行处理记录；确实需要替换时，才设置 `CF_OVERWRITE_DNS=true`。授权或 DNS 失败会让公网入口保持不可用，不会悄悄换成另一个临时域名。
+
+### Cloudflare 后台管理：Token 方式
+
+在 Cloudflare 后台配置隧道的公开主机名，并将服务地址设为 `http://127.0.0.1:3210`；如修改了 `PORT`，相应调整服务端口。隧道 Token **只写入本地 `.env`**：
+
+```dotenv
+HOST=127.0.0.1
+ENABLE_TUNNEL=true
+CF_HOSTNAME=codex.example.com
+CF_TUNNEL_TOKEN=<你在后台获取的隧道Token>
+```
+
+此方式必须填写后台配置的主机名，Relay 不会自动创建后台路由。程序通过子进程环境变量 `TUNNEL_TOKEN` 传递凭据，不将其放进命令行参数。Cloudflare 隧道 Token 与 Relay 浏览器访问凭据是两种不同的秘密。
+
+## 日常使用与限制
+
+1. **Send** 在断线或等待确认时保留输入。确认只代表已写入 PTY，不代表 Codex 已执行或完成任务。送达状态不确定时先查看终端，再决定重试。消息去重依赖有容量上限的内存缓存，最长约五分钟，不能保证服务重启后只执行一次。
+2. **Git Diff** 支持新建目录和按文件筛选。超过 256 KiB 的未跟踪文件会列为省略项，二进制文件不展示文本内容。Git 总输出超过 10 MiB 时可能返回错误。完整审查仍应使用本机 Git。
+3. **Restart** 会终止共享终端并新建一个。所有浏览器控制的是同一个会话。
+4. 重连时用最近 64 Ki 字符的输出替换当前显示。这是内存中的末尾片段，并非完整、持久化历史，也可能从半行或控制序列中间开始。
+5. **Lock** 仅清除当前浏览器保存的凭据，不会撤销其他浏览器的访问，也不会轮换服务端凭据。
+
+## 配置项
+
+程序读取**启动目录**下的 `.env`，已有进程环境变量优先。完整示例见 [`.env.example`](.env.example)。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `HOST` | `127.0.0.1` | 监听地址；`0.0.0.0` 开放局域网。仅通过隧道连接时使用回环地址。 |
+| `PORT` | `3210` | HTTP/WebSocket 端口，范围 1–65535。 |
+| `RELAY_AUTH_TOKEN` | 本地自动生成 | 共享访问凭据；公网模式至少 24 字符。单行，最多 256 字符，推荐自动生成值。 |
+| `RELAY_PIN` | 未设置 | 主凭据为空时的旧版兼容值。不推荐短 PIN，短 PIN 不能开启公网隧道。 |
+| `CODEX_CWD` | 启动目录 | 项目绝对路径，建议指向 Git 工作区。 |
+| `CODEX_CMD` | `codex` | 可信的本地 Shell 命令，以电脑当前用户权限运行。 |
+| `AUTO_START_CODEX` | `true` | 新建 Shell 后自动输入命令；设为 `false` 时仅启动 Shell。 |
+| `AUTO_OPEN_QR` | `true` | 启动及隧道设置结束后打开本地配对页。 |
+| `ENABLE_TUNNEL` | `false` | 显式启用 cloudflared。 |
+| `CF_HOSTNAME` | 空 | 自有主机名；没有隧道 Token 时，留空使用临时地址。 |
+| `CF_TUNNEL_NAME` | `codex-relay` | 证书模式使用的隧道名称。 |
+| `CF_TUNNEL_TOKEN` | 空 | 后台管理的隧道凭据，需同时配置主机名。 |
+| `CF_OVERWRITE_DNS` | `false` | 是否允许证书模式覆盖已有 DNS。 |
+
+### 从 0.2.0 升级
+
+- 删除本地 `.env` 中原作者域名。使用临时隧道时留空；使用自定义域名时填自己控制的域名。
+- 新默认值仅允许本机访问。已有 `.env` 中显式设置的 `HOST`、`ENABLE_TUNNEL` 仍然生效；复制默认配置也不会覆盖进程环境变量。
+- 更换旧短 PIN：停止 Relay，清空 `RELAY_AUTH_TOKEN`，同时从 `.env` 和进程环境中移除 `RELAY_PIN`，然后重启，程序会生成长凭据。轮换并重启后，旧链接和浏览器登录失效。
+- 公网模式要求至少 24 字符的 Relay 凭据。不要公开 `/qr` 截图、包含凭据的 URL 或 `.env`。
+
+## 访问权限与安全边界
+
+**通过鉴权的浏览器可以操作真实 Shell，权限等同于运行 Relay 的电脑账号。** Relay 不创建沙箱，也不把终端限制在 Git/Codex 命令范围内。建议使用普通权限账号，只开放计划操作的工作区。Codex 自身的执行策略不能保护外围 Shell。
+
+凭据不会自动过期，二维码和配对链接包含凭据，浏览器将其保存在 localStorage 中。程序从地址栏移除查询参数，并不意味着浏览器历史、代理日志或已复制的链接也被擦除。使用可信设备，公网使用 HTTPS。发生泄露时，更换凭据并重启 Relay，关闭已有连接。
+
+只有回环连接、本地主机 Host 且没有转发头时，本地 `/qr` 才允许免登录访问，其他请求需要鉴权。HTTP API 和 WebSocket 握手均校验凭据；五分钟窗口内失败八次后，该地址在剩余窗口内被封禁。直连客户端不能用转发头选择限流地址；仅在启用隧道且连接来自回环地址时才信任 Cloudflare 客户端 IP。不要让不可信本地代理进入这个信任边界。限流只是强随机凭据之外的辅助措施。
+
+正常退出会尝试关闭客户端、终端和托管隧道。系统崩溃或强制结束进程不在清理保证范围内，恢复时应检查是否残留 cloudflared 进程。详见 [SECURITY.md](SECURITY.md)。
+
+## API 概览
+
+脚本优先通过 `Authorization: Bearer <Relay访问凭据>` 或 `x-relay-token: <Relay访问凭据>` 传递凭据，避免查询参数。远程请求使用 HTTPS，反馈问题时删除真实凭据。
+
+| 接口 | 用途 |
+| --- | --- |
+| `POST /api/auth/verify` | 带限流的登录验证，JSON：`{ "token": "<Relay访问凭据>" }`。 |
+| `GET /api/health` | 鉴权后查询终端、工作区及隧道状态。 |
+| `GET /api/qr` | 鉴权后获取包含凭据的配对数据；不可用的公网/局域网 URL 为 `null`。 |
+| `GET /api/git/status` | 鉴权后查询分支与逐文件状态。 |
+| `GET /api/git/diff?file=<编码后的路径>` | 鉴权后获取 HTML/原始 Diff、`hasChanges`、`omittedFiles`；可选文件筛选。 |
+| `POST /api/action` | 鉴权后发送 `action`：`approve`、`reject`、`enter`、`esc`、`ctrl_c`、`start_codex`。 |
+| `/ws` | 已鉴权终端流；浏览器使用查询 Token，脚本可用请求头；拒绝其他浏览器来源。 |
+
+WebSocket 输出包括 `status`、`history`、`output`。发送 `{ "type": "input", "id": "<唯一消息ID>", "data": "..." }` 可收到对应 ID 的 `input-ack` / `input-error`。输入最多 16 Ki 字符，单帧最多 128 KiB；仍兼容无 ID 的终端按键。其他消息为 `resize`、`action`、`restart`、`ping`。
+
+## 常见问题
+
+| 现象 | 检查方法 |
+| --- | --- |
+| 原生依赖安装失败 | 使用 Node 22/24。源码编译需要 Python 和 C++ 工具；Windows 安装 Visual Studio Build Tools，macOS 安装 Command Line Tools，Linux 安装 make/G++。参考 [node-pty 依赖说明](https://github.com/microsoft/node-pty#dependencies)。 |
+| 终端提示找不到 `codex` | 检查当前用户 PATH、CLI 安装与登录、`CODEX_CMD`，先在本机执行确认。 |
+| Git 状态失败 | 检查 Git、文件权限，以及 `CODEX_CWD` 是否为 Git 工作区。 |
+| 手机无法连接局域网 | 检查 `HOST`、实际 IP、防火墙、同一网络和 Wi-Fi 客户端隔离。 |
+| 没有公网二维码 | 检查隧道开关、长访问凭据、cloudflared 连通性和域名授权/DNS 路由，完成启动后刷新 `/qr`。 |
+| 登录返回 429 | 等待五分钟失败窗口结束，并在本机核对凭据。 |
+| 重启打断任务 | 这是一个共享的内存终端，不是持久化任务调度器。 |
+
+## 开发与验证
+
+```bash
+npm ci --ignore-scripts
+npm rebuild node-pty
+npm test
+npm pack --dry-run
+```
+
+测试覆盖 Git 样例仓库、鉴权限流、HTTP/WebSocket、草稿确认与重连、终端生命周期、无害原生命令，以及模拟隧道/DNS 生命周期。测试不创建真实 DNS、不打开公网隧道、不登录 Codex。CI 目标为 Windows/macOS/Linux 与 Node 22/24，请以实际工作流结果为准。真实手机浏览器、Codex 交互提示和公网连通性需要额外端到端验证。
+
+[参与贡献](CONTRIBUTING.md) · [更新记录](CHANGELOG.md) · [MIT 许可](LICENSE)

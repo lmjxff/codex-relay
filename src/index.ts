@@ -2,18 +2,18 @@
 import dotenv from 'dotenv';
 import express, { Request, Response, NextFunction } from 'express';
 import http, { IncomingMessage } from 'http';
-import crypto from 'crypto';
 import os from 'os';
 import path from 'path';
 import fs from 'fs';
-import readline from 'readline';
-import { execFile, execFileSync, spawn } from 'child_process';
-import { promisify } from 'util';
+import { execFileSync, spawn } from 'child_process';
 import { Duplex } from 'stream';
 import * as pty from 'node-pty';
 import { WebSocketServer, WebSocket } from 'ws';
 import * as Diff2Html from 'diff2html';
 import QRCode from 'qrcode';
+import { AuthRateLimiter, createAuthToken, escapeHtml, getClientIp as resolveClientIp, isLocalhostRequest, verifyToken } from './security';
+import { readGitDiff, readGitStatus } from './git';
+import { attachPtyLifecycle, terminalSize } from './terminal-lifecycle';
 import {
   startCloudflareTunnel,
   stopActiveTunnel,
@@ -30,78 +30,43 @@ if (os.platform() === 'win32') {
   }
 }
 
-dotenv.config();
-
-const execFileAsync = promisify(execFile);
+dotenv.config({ quiet: true });
 
 const PORT = Number(process.env.PORT || 3210);
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = process.env.HOST || '127.0.0.1';
 const TARGET_CWD = path.resolve(process.env.CODEX_CWD || process.cwd());
 const CODEX_CMD = process.env.CODEX_CMD || 'codex';
 const AUTO_START_CODEX = process.env.AUTO_START_CODEX !== 'false';
-const ENABLE_TUNNEL = process.env.ENABLE_TUNNEL !== 'false';
+const ENABLE_TUNNEL = process.env.ENABLE_TUNNEL === 'true';
 const AUTO_OPEN_QR = process.env.AUTO_OPEN_QR !== 'false';
-const CF_HOSTNAME = process.env.CF_HOSTNAME || 'codex.lmjjml.cc.cd';
+const CF_HOSTNAME = (process.env.CF_HOSTNAME || '').trim();
 const CF_TUNNEL_NAME = process.env.CF_TUNNEL_NAME || 'codex-relay';
 const CF_TUNNEL_TOKEN = process.env.CF_TUNNEL_TOKEN || '';
+const CF_OVERWRITE_DNS = process.env.CF_OVERWRITE_DNS === 'true';
 
 let AUTH_TOKEN = (process.env.RELAY_AUTH_TOKEN || process.env.RELAY_PIN || '').trim();
 let activeTunnel: ActiveTunnel | null = null;
 
-// Brute-force rate limiter per IP
-interface RateRecord {
-  failures: number;
-  blockedUntil: number;
-}
-const ipRateMap = new Map<string, RateRecord>();
-const MAX_AUTH_FAILURES = 8;
-const BLOCK_DURATION_MS = 5 * 60 * 1000;
+const authLimiter = new AuthRateLimiter();
 
 function getClientIp(req: IncomingMessage | Request): string {
-  const cfIp = req.headers['cf-connecting-ip'];
-  if (typeof cfIp === 'string' && cfIp.trim()) return cfIp.trim();
-  const xff = req.headers['x-forwarded-for'];
-  if (typeof xff === 'string' && xff.trim()) return xff.split(',')[0].trim();
-  return req.socket?.remoteAddress || 'unknown';
-}
-
-function isLocalhostRequest(req: IncomingMessage | Request): boolean {
-  if (req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']) {
-    return false;
-  }
-  const addr = req.socket?.remoteAddress || '';
-  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+  return resolveClientIp(req, ENABLE_TUNNEL);
 }
 
 function isIpBlocked(ip: string): boolean {
-  const rec = ipRateMap.get(ip);
-  if (!rec) return false;
-  if (rec.blockedUntil > Date.now()) return true;
-  if (rec.blockedUntil !== 0 && rec.blockedUntil <= Date.now()) {
-    ipRateMap.delete(ip);
-  }
-  return false;
+  return authLimiter.isBlocked(ip);
 }
 
 function recordAuthFailure(ip: string): void {
-  const rec = ipRateMap.get(ip) || { failures: 0, blockedUntil: 0 };
-  rec.failures += 1;
-  if (rec.failures >= MAX_AUTH_FAILURES) {
-    rec.blockedUntil = Date.now() + BLOCK_DURATION_MS;
-    console.warn(`[Security] IP ${ip} blocked for 5 minutes due to repeated failed PIN attempts.`);
-  }
-  ipRateMap.set(ip, rec);
+  authLimiter.fail(ip);
 }
 
 function clearAuthFailures(ip: string): void {
-  ipRateMap.delete(ip);
+  authLimiter.clear(ip);
 }
 
-function verifyAuthToken(candidate: string | undefined | null): boolean {
-  if (!AUTH_TOKEN || !candidate) return false;
-  const expectedHash = crypto.createHash('sha256').update(AUTH_TOKEN).digest();
-  const candidateHash = crypto.createHash('sha256').update(String(candidate).trim()).digest();
-  return crypto.timingSafeEqual(expectedHash, candidateHash);
+function verifyAuthToken(candidate: unknown): boolean {
+  return verifyToken(AUTH_TOKEN, candidate);
 }
 
 function extractTokenFromRequest(req: IncomingMessage | Request): string {
@@ -125,70 +90,45 @@ function extractTokenFromRequest(req: IncomingMessage | Request): string {
 
 async function ensureAuthTokenConfigured(): Promise<string> {
   if (AUTH_TOKEN) return AUTH_TOKEN;
-
+  const pinIndex = process.argv.indexOf('--pin');
+  if (pinIndex !== -1 && process.argv[pinIndex + 1]) {
+    AUTH_TOKEN = process.argv[pinIndex + 1].trim();
+  }
+  if (!AUTH_TOKEN) AUTH_TOKEN = createAuthToken();
+  if (/[\r\n]/.test(AUTH_TOKEN) || AUTH_TOKEN.length > 256) {
+    throw new Error('Access token must be a single line of at most 256 characters.');
+  }
   const envPath = path.join(process.cwd(), '.env');
-  const pinArgIdx = process.argv.indexOf('--pin');
-  if (pinArgIdx !== -1 && process.argv[pinArgIdx + 1]) {
-    AUTH_TOKEN = process.argv[pinArgIdx + 1].trim();
+  let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  const tokenLine = /^\s*(?:export\s+)?RELAY_AUTH_TOKEN\s*=.*$/gm;
+  const setting = `RELAY_AUTH_TOKEN=${JSON.stringify(AUTH_TOKEN)}`;
+  if (tokenLine.test(content)) {
+    content = content.replace(tokenLine, () => setting);
+  } else {
+    content += `${content && !content.endsWith('\n') ? '\n' : ''}${setting}\n`;
   }
-
-  if (!AUTH_TOKEN && process.stdin.isTTY && !process.env.TSX_WATCH_PROCESS) {
-    const defaultPin = String(crypto.randomInt(100000, 999999));
-    AUTH_TOKEN = await new Promise<string>((resolve) => {
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-      });
-      const timer = setTimeout(() => {
-        rl.close();
-        console.log(`\n[安全设置] 未输入，已自动生成 6 位安全访问 PIN 码: ${defaultPin}`);
-        resolve(defaultPin);
-      }, 8000);
-
-      rl.question(
-        `\n[安全设置] 请输入自定义访问密码/PIN 码 (直接回车或等待 8 秒自动使用 [${defaultPin}]): `,
-        (answer) => {
-          clearTimeout(timer);
-          rl.close();
-          const chosen = answer.trim() || defaultPin;
-          resolve(chosen);
-        }
-      );
-    });
-  }
-
-  if (!AUTH_TOKEN) {
-    AUTH_TOKEN = String(crypto.randomInt(100000, 999999));
-  }
-
-  try {
-    let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-    if (!envContent.includes('RELAY_AUTH_TOKEN=')) {
-      const prefix = envContent.length > 0 && !envContent.endsWith('\n') ? '\n' : '';
-      envContent += `${prefix}RELAY_AUTH_TOKEN=${AUTH_TOKEN}\n`;
-      if (!envContent.includes('CF_HOSTNAME=')) {
-        envContent += `CF_HOSTNAME=${CF_HOSTNAME}\n`;
-      }
-      fs.writeFileSync(envPath, envContent, 'utf8');
-      console.log(`[安全设置] 已将访问密码保存至配置文件: ${envPath}`);
-    }
-  } catch {
-    // ignore write error
-  }
-
+  fs.writeFileSync(envPath, content, { encoding: 'utf8', mode: 0o600 });
+  console.log('[Security] Access credential saved to local .env; open the local /qr page to pair a trusted device.');
   return AUTH_TOKEN;
 }
 
 const app = express();
+app.use((_req, res, next) => {
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  next();
+});
 app.use(express.json());
+app.use(['/api', '/qr'], (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+app.get('/vendor/xterm.js', (_req, res) => res.sendFile(require.resolve('@xterm/xterm')));
+app.get('/vendor/addon-fit.js', (_req, res) => res.sendFile(require.resolve('@xterm/addon-fit')));
+app.get('/vendor/xterm.css', (_req, res) => res.sendFile(path.resolve(path.dirname(require.resolve('@xterm/xterm')), '../css/xterm.css')));
+app.get('/vendor/diff2html.css', (_req, res) => res.sendFile(require.resolve('diff2html/bundles/css/diff2html.min.css')));
 app.use(express.static(path.join(__dirname, '..', 'public')));
-
-export interface GitFileStatus {
-  code: string;
-  file: string;
-  staged: boolean;
-  untracked: boolean;
-}
 
 interface WsClientMessage {
   type: 'input' | 'resize' | 'action' | 'restart' | 'ping';
@@ -196,12 +136,14 @@ interface WsClientMessage {
   cols?: number;
   rows?: number;
   action?: 'approve' | 'reject' | 'enter' | 'esc' | 'ctrl_c' | 'start_codex';
+  id?: string;
 }
 
 const MAX_BUFFER_CHARS = 64 * 1024;
 let terminalBuffer = '';
 let ptyProcess: pty.IPty | null = null;
 const clients = new Set<WebSocket>();
+const acceptedInputs = new Map<string, number>();
 
 function appendBuffer(chunk: string): void {
   terminalBuffer += chunk;
@@ -243,16 +185,15 @@ function spawnCodexPty(cols = 80, rows = 24): pty.IPty {
   }
 
   const { shell, args } = resolveDefaultShell();
+  const terminalEnv: Record<string, string> = { ...(process.env as Record<string, string>), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+  delete terminalEnv.RELAY_AUTH_TOKEN;
+  delete terminalEnv.RELAY_PIN;
+  delete terminalEnv.CF_TUNNEL_TOKEN;
   const proc = pty.spawn(shell, args, {
     name: 'xterm-256color',
-    cols,
-    rows,
+    ...terminalSize(cols, rows),
     cwd: TARGET_CWD,
-    env: {
-      ...(process.env as Record<string, string>),
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor',
-    },
+    env: terminalEnv,
   });
 
   ptyProcess = proc;
@@ -261,12 +202,10 @@ function spawnCodexPty(cols = 80, rows = 24): pty.IPty {
   appendBuffer(banner);
   broadcast({ type: 'output', data: banner });
 
-  proc.onData((data: string) => {
+  attachPtyLifecycle(proc, () => ptyProcess, (data: string) => {
     appendBuffer(data);
     broadcast({ type: 'output', data });
-  });
-
-  proc.onExit(({ exitCode, signal }) => {
+  }, ({ exitCode, signal }) => {
     const msg = `\r\n\x1b[1;31m[codex-relay]\x1b[0m Process exited (code=${exitCode}, signal=${signal ?? 'none'}).\r\n`;
     appendBuffer(msg);
     broadcast({ type: 'output', data: msg });
@@ -278,7 +217,8 @@ function spawnCodexPty(cols = 80, rows = 24): pty.IPty {
     setTimeout(() => {
       if (ptyProcess === proc) {
         const lineEnding = os.platform() === 'win32' ? '\r\n' : '\n';
-        proc.write(`${CODEX_CMD}${lineEnding}`);
+        try { proc.write(`${CODEX_CMD}${lineEnding}`); }
+        catch { console.error('[Terminal] Unable to write the startup command. Check the terminal and restart the session.'); }
       }
     }, 350);
   }
@@ -295,10 +235,15 @@ function spawnCodexPty(cols = 80, rows = 24): pty.IPty {
 }
 
 function sendTerminalAction(action: WsClientMessage['action']): void {
-  if (!ptyProcess) {
-    spawnCodexPty();
+  if (!action || !['approve', 'reject', 'enter', 'esc', 'ctrl_c', 'start_codex'].includes(action)) {
+    throw new Error('Unknown action');
   }
-  if (!ptyProcess) return;
+  if (!ptyProcess && action === 'start_codex') {
+    spawnCodexPty();
+    // A new shell already schedules CODEX_CMD when automatic startup is enabled.
+    if (AUTO_START_CODEX) return;
+  }
+  if (!ptyProcess) throw new Error('Terminal stopped. Restart the session first.');
 
   const eol = os.platform() === 'win32' ? '\r' : '\n';
   switch (action) {
@@ -323,64 +268,27 @@ function sendTerminalAction(action: WsClientMessage['action']): void {
   }
 }
 
-async function runGit(args: string[]): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync('git', args, {
-      cwd: TARGET_CWD,
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    return stdout;
-  } catch (err: any) {
-    if (typeof err?.stdout === 'string' && err.stdout.length > 0) {
-      return err.stdout;
-    }
-    throw err;
-  }
-}
-
-async function buildUntrackedPatch(relPath: string): Promise<string> {
-  try {
-    const absPath = path.resolve(TARGET_CWD, relPath);
-    if (!absPath.startsWith(TARGET_CWD)) return '';
-    const stat = await fs.promises.stat(absPath);
-    if (!stat.isFile() || stat.size > 256 * 1024) return '';
-    const content = await fs.promises.readFile(absPath, 'utf8');
-    const lines = content.replace(/\r\n/g, '\n').split('\n');
-    if (lines[lines.length - 1] === '') lines.pop();
-    const body = lines.map((line) => `+${line}`).join('\n');
-    return [
-      `diff --git a/${relPath} b/${relPath}`,
-      `new file mode 100644`,
-      `--- /dev/null`,
-      `+++ b/${relPath}`,
-      `@@ -0,0 +1,${lines.length} @@`,
-      body,
-      '',
-    ].join('\n');
-  } catch {
-    return '';
-  }
-}
-
 async function buildQrPayload() {
   const lanIp = getLocalLanIp();
-  const publicBaseUrl = activeTunnel?.url || `https://${CF_HOSTNAME}`;
-  const publicMagicUrl = `${publicBaseUrl.replace(/\/$/, '')}/?token=${encodeURIComponent(AUTH_TOKEN)}`;
-  const lanMagicUrl = `http://${lanIp}:${PORT}/?token=${encodeURIComponent(AUTH_TOKEN)}`;
+  const publicBaseUrl = activeTunnel?.isReady() ? activeTunnel.url : null;
+  const publicMagicUrl = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}/?token=${encodeURIComponent(AUTH_TOKEN)}` : null;
+  const lanEnabled = !['127.0.0.1', 'localhost', '::1'].includes(HOST);
+  const lanBaseUrl = lanEnabled ? `http://${lanIp}:${PORT}` : null;
+  const lanMagicUrl = lanBaseUrl ? `${lanBaseUrl}/?token=${encodeURIComponent(AUTH_TOKEN)}` : null;
 
   const [publicQrSvg, lanQrSvg] = await Promise.all([
-    QRCode.toString(publicMagicUrl, {
+    publicMagicUrl ? QRCode.toString(publicMagicUrl, {
       type: 'svg',
       margin: 2,
       width: 260,
       color: { dark: '#0d1117', light: '#ffffff' },
-    }),
-    QRCode.toString(lanMagicUrl, {
+    }) : '',
+    lanMagicUrl ? QRCode.toString(lanMagicUrl, {
       type: 'svg',
       margin: 2,
       width: 260,
       color: { dark: '#0d1117', light: '#ffffff' },
-    }),
+    }) : '',
   ]);
 
   return {
@@ -388,14 +296,15 @@ async function buildQrPayload() {
     publicBaseUrl,
     publicMagicUrl,
     publicQrSvg,
-    lanBaseUrl: `http://${lanIp}:${PORT}`,
+    lanBaseUrl,
     lanMagicUrl,
     lanQrSvg,
   };
 }
 
 // Localhost-only or authenticated standalone HD QR Code page
-app.get('/qr', async (req: Request, res: Response) => {
+app.get('/qr', async (req: Request, res: Response, next: NextFunction) => {
+  try {
   const token = extractTokenFromRequest(req);
   if (!isLocalhostRequest(req) && !verifyAuthToken(token)) {
     res.redirect('/');
@@ -425,7 +334,7 @@ app.get('/qr', async (req: Request, res: Response) => {
     .tip { font-size:0.76rem; color:#8b949e; line-height:1.45; }
     .footer { margin-top:22px; text-align:center; display:flex; flex-direction:column; gap:10px; align-items:center; }
     .pin-box { background:#21262d; border:1px solid #30363d; padding:8px 18px; border-radius:10px; font-size:0.95rem; }
-    .pin-box strong { color:#3fb950; font-family:monospace; font-size:1.15rem; letter-spacing:2px; }
+    .pin-box strong { color:#3fb950; font-family:monospace; font-size:0.9rem; overflow-wrap:anywhere; }
     .btn { display:inline-block; background:#58a6ff; color:#090d12; font-weight:700; text-decoration:none; padding:10px 22px; border-radius:10px; font-size:0.92rem; }
   </style>
 </head>
@@ -434,26 +343,27 @@ app.get('/qr', async (req: Request, res: Response) => {
     <h1>📱 手机扫码远程控制 Codex CLI</h1>
     <p class="sub">直接用手机相机、浏览器或微信扫一扫下方高清二维码，免输密码一键登录</p>
     <div class="grid">
-      <div class="card">
+      ${qr.publicMagicUrl ? `<div class="card">
         <span class="badge pub">🌍 外网 4G/5G 远程连接 (Cloudflare)</span>
         <div class="qr-box">${qr.publicQrSvg}</div>
-        <div class="url">${qr.publicMagicUrl}</div>
-        <div class="tip">适合出门在外使用手机 5G 流量访问。<br/>注：国内移动网络访问 Cloudflare 若遇阻断，请在手机开启代理。</div>
-      </div>
-      <div class="card">
-        <span class="badge lan">📶 同一 Wi-Fi 局域网秒连 (零延迟)</span>
+        <div class="url">${escapeHtml(qr.publicMagicUrl)}</div>
+        <div class="tip">仅向可信设备展示；二维码包含访问凭据。</div>
+      </div>` : `<div class="card"><h2>公网入口不可用</h2><p class="tip">未启用隧道、隧道尚未就绪或已经退出。不会生成公网访问码。</p></div>`}
+      ${qr.lanMagicUrl ? `<div class="card">
+        <span class="badge lan">📶 同一 Wi-Fi 局域网连接</span>
         <div class="qr-box">${qr.lanQrSvg}</div>
-        <div class="url">${qr.lanMagicUrl}</div>
-        <div class="tip">适合在家/办公室同一 Wi-Fi 下使用。<br/>无需经过外网中转，速度最快、100% 稳定直连。</div>
-      </div>
+        <div class="url">${escapeHtml(qr.lanMagicUrl)}</div>
+        <div class="tip">仅在可信的同一 Wi-Fi 下使用。HTTP 不提供传输加密。</div>
+      </div>` : `<div class="card"><h2>当前仅允许本机访问</h2><p class="tip">需要手机局域网访问时，在本地 .env 设置 HOST=0.0.0.0 并重启。</p></div>`}
     </div>
     <div class="footer">
-      <div class="pin-box">当前访问密码 (PIN): <strong>${qr.pin}</strong></div>
+      <div class="pin-box">当前访问凭据（请勿公开）: <strong>${escapeHtml(qr.pin)}</strong></div>
       <a class="btn" href="/?token=${encodeURIComponent(qr.pin)}">进入电脑端 Web 控制台 →</a>
     </div>
   </div>
 </body>
 </html>`);
+  } catch (error) { next(error); }
 });
 
 // Public Auth Verification Endpoint (Protected by Brute-Force Limiter)
@@ -482,7 +392,7 @@ app.post('/api/auth/verify', (req: Request, res: Response) => {
   res.json({
     ok: true,
     cwd: TARGET_CWD,
-    tunnelUrl: activeTunnel?.url || null,
+    tunnelUrl: activeTunnel?.isReady() ? activeTunnel.url : null,
     hostname: CF_HOSTNAME,
   });
 });
@@ -512,8 +422,8 @@ app.get('/api/qr', async (_req: Request, res: Response) => {
   try {
     const payload = await buildQrPayload();
     res.json({ ok: true, ...payload });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: err?.message || 'Failed to generate QR code' });
+  } catch {
+    res.status(500).json({ ok: false, error: 'Failed to generate QR code' });
   }
 });
 
@@ -525,115 +435,51 @@ app.get('/api/health', (_req: Request, res: Response) => {
     cwd: TARGET_CWD,
     codexCmd: CODEX_CMD,
     clients: clients.size,
-    tunnelUrl: activeTunnel?.url ?? null,
-    tunnelMode: activeTunnel?.mode ?? null,
+    tunnelUrl: activeTunnel?.isReady() ? activeTunnel.url : null,
+    tunnelMode: activeTunnel?.isReady() ? activeTunnel.mode : null,
   });
 });
 
 app.post('/api/action', (req: Request, res: Response) => {
   const action = req.body?.action as WsClientMessage['action'];
-  if (!action) {
-    res.status(400).json({ ok: false, error: 'Missing action field' });
+  if (!action || !['approve', 'reject', 'enter', 'esc', 'ctrl_c', 'start_codex'].includes(action)) {
+    res.status(400).json({ ok: false, error: 'Unknown action' });
     return;
   }
-  sendTerminalAction(action);
-  res.json({ ok: true, action });
+  try {
+    sendTerminalAction(action);
+    res.json({ ok: true, action });
+  } catch {
+    res.status(409).json({ ok: false, error: 'Terminal unavailable. Restart the session first.' });
+  }
 });
 
 app.get('/api/git/status', async (_req: Request, res: Response) => {
   try {
-    const branchOut = await runGit(['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => 'HEAD');
-    const statusOut = await runGit(['status', '--porcelain=v1']);
-    const files: GitFileStatus[] = statusOut
-      .split(/\r?\n/)
-      .filter((line) => line.trim().length > 0)
-      .map((line) => {
-        const code = line.slice(0, 2);
-        const file = line.slice(3).trim();
-        return {
-          code: code.trim() || 'M',
-          file,
-          staged: code[0] !== ' ' && code[0] !== '?',
-          untracked: code === '??',
-        };
-      });
-
-    res.json({
-      ok: true,
-      cwd: TARGET_CWD,
-      branch: branchOut.trim(),
-      files,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      ok: false,
-      error: error?.message || 'Failed to read git status',
-    });
+    const status = await readGitStatus(TARGET_CWD);
+    res.json({ ok: true, cwd: TARGET_CWD, repoRoot: status.root,
+      branch: status.branch, files: status.files, timestamp: new Date().toISOString() });
+  } catch {
+    res.status(500).json({ ok: false, error: 'Unable to read Git status. Check the workspace and Git installation.' });
   }
 });
 
 app.get('/api/git/diff', async (req: Request, res: Response) => {
   try {
-    const targetFile = typeof req.query.file === 'string' ? req.query.file.trim() : '';
-    const hasHead = await runGit(['rev-parse', '--verify', 'HEAD'])
-      .then(() => true)
-      .catch(() => false);
-
-    const diffArgs = hasHead ? ['diff', 'HEAD', '--unified=3'] : ['diff', '--unified=3'];
-    if (targetFile) {
-      diffArgs.push('--', targetFile);
-    }
-
-    let rawDiff = await runGit(diffArgs);
-
-    if (!rawDiff.trim()) {
-      const stagedArgs = ['diff', '--cached', '--unified=3'];
-      if (targetFile) stagedArgs.push('--', targetFile);
-      rawDiff = await runGit(stagedArgs);
-    }
-
-    const statusOut = await runGit(['status', '--porcelain=v1']);
-    const untrackedFiles = statusOut
-      .split(/\r?\n/)
-      .filter((l) => l.startsWith('?? '))
-      .map((l) => l.slice(3).trim())
-      .filter((f) => !targetFile || f === targetFile);
-
-    for (const untracked of untrackedFiles) {
-      const patch = await buildUntrackedPatch(untracked);
-      if (patch) {
-        rawDiff += (rawDiff.endsWith('\n') || !rawDiff ? '' : '\n') + patch;
-      }
-    }
-
-    const html = rawDiff.trim()
-      ? Diff2Html.html(rawDiff, {
-          drawFileList: true,
-          matching: 'lines',
-          outputFormat: 'line-by-line',
-        })
-      : '';
-
-    res.json({
-      ok: true,
-      cwd: TARGET_CWD,
-      file: targetFile || null,
-      rawDiff,
-      html,
-      hasChanges: Boolean(rawDiff.trim()),
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      ok: false,
-      error: error?.message || 'Failed to generate git diff',
-    });
+    const targetFile = typeof req.query.file === 'string' ? req.query.file : '';
+    const diff = await readGitDiff(TARGET_CWD, targetFile);
+    const html = diff.rawDiff.trim() ? Diff2Html.html(diff.rawDiff, {
+      drawFileList: true, matching: 'lines', outputFormat: 'line-by-line',
+    }) : '';
+    res.json({ ok: true, cwd: TARGET_CWD, file: targetFile || null,
+      ...diff, html, timestamp: new Date().toISOString() });
+  } catch {
+    res.status(500).json({ ok: false, error: 'Unable to generate the Git preview. Check the workspace and selected path.' });
   }
 });
 
 export const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: 128 * 1024 });
 
 // Connection Isolation: Strictly authenticate every WebSocket upgrade request
 server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
@@ -643,6 +489,12 @@ server.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) =>
     const parsedUrl = new URL(request.url || '/', 'http://localhost');
     if (parsedUrl.pathname !== '/ws') {
       socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    if (request.headers.origin && new URL(request.headers.origin).host !== request.headers.host) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
@@ -678,7 +530,12 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
   console.log(`[WebSocket] Authenticated client connected (${clientIp}), active=${clients.size}`);
 
   if (!ptyProcess) {
-    spawnCodexPty();
+    try { spawnCodexPty(); }
+    catch {
+      clients.delete(ws);
+      ws.close(1011, 'Terminal unavailable. Check the host.');
+      return;
+    }
   }
 
   ws.send(
@@ -688,28 +545,42 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
       pid: ptyProcess?.pid ?? null,
       cwd: TARGET_CWD,
       cmd: CODEX_CMD,
-      tunnelUrl: activeTunnel?.url ?? null,
+      tunnelUrl: activeTunnel?.isReady() ? activeTunnel.url : null,
     })
   );
 
-  if (terminalBuffer) {
-    ws.send(JSON.stringify({ type: 'output', data: terminalBuffer }));
-  }
+  ws.send(JSON.stringify({ type: 'history', data: terminalBuffer }));
 
   ws.on('message', (raw: Buffer | string) => {
+    let messageId: string | undefined;
     try {
       const msg = JSON.parse(raw.toString()) as WsClientMessage;
+      messageId = typeof msg.id === 'string' && msg.id.length <= 128 ? msg.id : undefined;
       switch (msg.type) {
         case 'input':
-          if (typeof msg.data === 'string') {
-            if (!ptyProcess) spawnCodexPty();
-            ptyProcess?.write(msg.data);
+          if (typeof msg.data === 'string' && msg.data.length <= 16 * 1024) {
+            if (messageId) {
+              const now = Date.now();
+              for (const [id, acceptedAt] of acceptedInputs) if (acceptedAt < now - 5 * 60 * 1000) acceptedInputs.delete(id);
+              if (acceptedInputs.has(messageId)) {
+                ws.send(JSON.stringify({ type: 'input-ack', id: messageId }));
+                break;
+              }
+            }
+            if (!ptyProcess) throw new Error('Terminal unavailable');
+            ptyProcess.write(msg.data);
+            if (messageId) {
+              acceptedInputs.set(messageId, Date.now());
+              if (acceptedInputs.size > 1000) acceptedInputs.delete(acceptedInputs.keys().next().value!);
+              ws.send(JSON.stringify({ type: 'input-ack', id: messageId }));
+            }
+          } else {
+            throw new Error('Invalid terminal input');
           }
           break;
         case 'resize':
           if (ptyProcess && typeof msg.cols === 'number' && typeof msg.rows === 'number') {
-            const cols = Math.max(20, Math.min(300, Math.floor(msg.cols)));
-            const rows = Math.max(5, Math.min(120, Math.floor(msg.rows)));
+            const { cols, rows } = terminalSize(msg.cols, msg.rows);
             ptyProcess.resize(cols, rows);
           }
           break;
@@ -725,13 +596,20 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
           break;
       }
     } catch {
-      // Ignore malformed JSON frames
+      if (messageId && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'input-error', id: messageId, error: 'Input was not accepted by the terminal.' }));
+      }
     }
   });
 
   ws.on('close', () => {
     clients.delete(ws);
   });
+  ws.on('error', () => clients.delete(ws));
+});
+
+app.use((_error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  res.status(400).json({ ok: false, error: 'Unable to process this request.' });
 });
 
 function getLocalLanIp(): string {
@@ -780,7 +658,7 @@ function getLocalLanIp(): string {
 function openUrlInBrowser(url: string): void {
   try {
     if (os.platform() === 'win32') {
-      spawn('cmd.exe', ['/c', 'start', '', url], { stdio: 'ignore', detached: true }).unref();
+      spawn('cmd.exe', ['/c', 'start', '', url], { stdio: 'ignore', detached: true, windowsHide: true }).unref();
     } else if (os.platform() === 'darwin') {
       spawn('open', [url], { stdio: 'ignore', detached: true }).unref();
     } else {
@@ -793,7 +671,7 @@ function openUrlInBrowser(url: string): void {
 
 // Strict Lifecycle Binding: Destroy Cloudflare Tunnel & PTY immediately on exit
 let isShuttingDown = false;
-function gracefulShutdown(reason: string): void {
+function gracefulShutdown(reason: string, exitCode = 0): void {
   if (isShuttingDown) return;
   isShuttingDown = true;
   console.log(`\n[Lifecycle] 正在关闭 Codex Relay (${reason})，销毁公网隧道与终端进程...`);
@@ -818,17 +696,21 @@ function gracefulShutdown(reason: string): void {
   }
 
   server.close(() => {
-    process.exit(0);
+    process.exit(exitCode);
   });
 
   setTimeout(() => {
-    process.exit(0);
+    process.exit(exitCode);
   }, 800).unref();
 }
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGHUP', () => gracefulShutdown('SIGHUP'));
+server.on('error', () => {
+  console.error('[Startup] Listener failed. Check HOST, PORT and whether the port is already in use.');
+  gracefulShutdown('listener error', 1);
+});
 process.on('exit', () => {
   stopActiveTunnel();
   if (ptyProcess) {
@@ -847,20 +729,22 @@ async function bootstrap(): Promise<void> {
   }
 
   await ensureAuthTokenConfigured();
+  if (/[\r\n]/.test(AUTH_TOKEN) || AUTH_TOKEN.length > 256) throw new Error('Invalid access credential configuration.');
+  if (ENABLE_TUNNEL && AUTH_TOKEN.length < 24) {
+    throw new Error('Public tunnels require an access credential of at least 24 characters. Remove the short RELAY_AUTH_TOKEN setting and restart to generate a random one.');
+  }
+  if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error('PORT must be between 1 and 65535.');
   spawnCodexPty();
 
   server.listen(PORT, HOST, async () => {
-    const lanIp = getLocalLanIp();
-    const lanMagicUrl = `http://${lanIp}:${PORT}/?token=${encodeURIComponent(AUTH_TOKEN)}`;
     const localQrPageUrl = `http://localhost:${PORT}/qr`;
 
     console.log('====================================================');
     console.log('  Codex Relay — Mobile Codex CLI Bridge');
     console.log(`  Workspace   : ${TARGET_CWD}`);
     console.log(`  Command     : ${CODEX_CMD}`);
-    console.log(`  Access PIN  : ${AUTH_TOKEN}`);
-    console.log(`  Local URL   : http://localhost:${PORT}/?token=${encodeURIComponent(AUTH_TOKEN)}`);
-    console.log(`  Wi-Fi URL   : ${lanMagicUrl}`);
+    console.log(`  Local URL   : http://localhost:${PORT}/`);
+    console.log(`  Bind address: ${HOST} (public tunnel: ${ENABLE_TUNNEL ? 'enabled' : 'disabled'})`);
     console.log(`  高清扫码页面 : ${localQrPageUrl}`);
     console.log('====================================================');
 
@@ -868,14 +752,21 @@ async function bootstrap(): Promise<void> {
       try {
         activeTunnel = await startCloudflareTunnel({
           port: PORT,
-          authToken: AUTH_TOKEN,
           hostname: CF_HOSTNAME,
           tunnelName: CF_TUNNEL_NAME,
           tunnelToken: CF_TUNNEL_TOKEN,
+          overwriteDns: CF_OVERWRITE_DNS,
           localQrPageUrl,
         });
+        const tunnel = activeTunnel;
+        tunnel.process.once('exit', () => {
+          if (activeTunnel === tunnel) {
+            activeTunnel = null;
+            broadcast({ type: 'status', tunnelUrl: null });
+          }
+        });
       } catch (err: any) {
-        console.error(`[Cloudflare] 隧道启动失败: ${err?.message || err}`);
+        console.error(`[Cloudflare] Tunnel unavailable: ${err?.message || 'startup failed'}. Local access remains available.`);
       }
     }
 
@@ -886,5 +777,8 @@ async function bootstrap(): Promise<void> {
 }
 
 if (require.main === module) {
-  bootstrap();
+  bootstrap().catch(() => {
+    console.error('[Startup] Unable to start Relay. Check the workspace, native PTY dependencies, PORT (1-65535) and access credential (24+ characters for public tunnels).');
+    gracefulShutdown('startup failed', 1);
+  });
 }

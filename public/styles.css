@@ -546,3 +546,8 @@ body {
   opacity: 0.88;
   margin-top: 2px;
 }
+/* Draft and preview status stays readable on a narrow phone screen. */
+[hidden] { display: none !important; }
+.prompt-status { min-height: 1.2em; margin: 0 4px 8px; font-size: 0.8rem; color: #b1bac4; }
+.preview-notice { padding: 10px; color: #d29922; overflow-wrap: anywhere; }
+.send-btn:disabled { opacity: 0.65; cursor: wait; }

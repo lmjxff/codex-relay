@@ -9,230 +9,162 @@ const execFileAsync = promisify(execFile);
 
 export interface TunnelOptions {
   port: number;
-  authToken: string;
   hostname?: string;
   tunnelName?: string;
   tunnelToken?: string;
+  localQrPageUrl?: string;
+  overwriteDns?: boolean;
+  timeoutMs?: number;
 }
 
 export interface ActiveTunnel {
   url: string;
   mode: 'custom-token' | 'custom-cert' | 'quick-trycloudflare';
   process: ChildProcess;
+  isReady: () => boolean;
   stop: () => void;
 }
 
 let activeTunnelProcess: ChildProcess | null = null;
 
 export function stopActiveTunnel(): void {
-  if (activeTunnelProcess) {
-    try {
-      activeTunnelProcess.kill('SIGTERM');
-      if (os.platform() === 'win32' && activeTunnelProcess.pid) {
-        spawn('taskkill', ['/PID', String(activeTunnelProcess.pid), '/T', '/F'], {
-          stdio: 'ignore',
-        });
-      }
-    } catch {
-      // ignore cleanup errors
+  const child = activeTunnelProcess;
+  activeTunnelProcess = null;
+  if (!child || child.exitCode !== null) return;
+  try {
+    child.kill('SIGTERM');
+    if (os.platform() === 'win32' && child.pid) {
+      const cleanup = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore', windowsHide: true,
+      });
+      cleanup.on('error', () => {});
     }
-    activeTunnelProcess = null;
+  } catch {
+    // Cleanup is best effort; callers must not advertise the stopped process.
   }
 }
 
 async function ensureBinary(): Promise<string> {
   if (!fs.existsSync(cloudflaredBin)) {
-    console.log('[Cloudflare] Downloading cloudflared binary for first-time setup...');
+    console.log('[Cloudflare] Installing cloudflared for the first tunnel setup...');
     await installCloudflared(cloudflaredBin);
   }
   return cloudflaredBin;
 }
 
-function getCloudflaredCertPath(): string {
-  return path.join(os.homedir(), '.cloudflared', 'cert.pem');
-}
-
 export async function runCloudflaredLogin(): Promise<void> {
   const binPath = await ensureBinary();
-  console.log('====================================================');
-  console.log('  Cloudflare Tunnel 域名授权登录 (lmjjml.cc.cd)');
-  console.log('  请在弹出的浏览器页面中选择你的域名并点击 Authorize');
-  console.log('====================================================');
-  const child = spawn(binPath, ['tunnel', 'login'], {
-    stdio: 'inherit',
-  });
+  console.log('[Cloudflare] Select a domain you control in the authorization page.');
+  const child = spawn(binPath, ['tunnel', 'login'], { stdio: 'inherit', windowsHide: true });
   await new Promise<void>((resolve, reject) => {
-    child.on('exit', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`cloudflared login exited with code ${code}`));
-    });
+    child.once('error', () => reject(new Error('Unable to start cloudflared login.')));
+    child.once('exit', code => code === 0 ? resolve() : reject(new Error('Cloudflared login did not complete.')));
   });
 }
 
-async function ensureNamedTunnelAndRoute(
-  binPath: string,
-  tunnelName: string,
-  hostname: string
-): Promise<void> {
+async function ensureNamedTunnelAndRoute(binPath: string, name: string, hostname: string, overwrite = false): Promise<void> {
   try {
-    await execFileAsync(binPath, ['tunnel', 'info', tunnelName]);
+    await execFileAsync(binPath, ['tunnel', 'info', name], { windowsHide: true });
   } catch {
-    console.log(`[Cloudflare] Creating named tunnel "${tunnelName}"...`);
-    try {
-      await execFileAsync(binPath, ['tunnel', 'create', tunnelName]);
-    } catch {
-      // May already exist in account
-    }
+    await execFileAsync(binPath, ['tunnel', 'create', name], { windowsHide: true });
   }
-
-  console.log(`[Cloudflare] Routing DNS CNAME: https://${hostname} -> tunnel "${tunnelName}"...`);
-  await execFileAsync(binPath, [
-    'tunnel',
-    'route',
-    'dns',
-    '--overwrite-dns',
-    tunnelName,
-    hostname,
-  ]);
+  // Existing DNS records are preserved unless the owner explicitly opts in.
+  const args = ['tunnel', 'route', 'dns'];
+  if (overwrite) args.push('--overwrite-dns');
+  args.push(name, hostname);
+  try {
+    await execFileAsync(binPath, args, { windowsHide: true });
+  } catch {
+    throw new Error('DNS route was not created. Check domain authorization and existing records; automatic overwrite is disabled by default.');
+  }
 }
 
-export function printTunnelBanner(
-  publicUrl: string,
-  authToken: string,
-  modeLabel: string,
-  localQrPageUrl: string
-): void {
-  const magicUrl = `${publicUrl.replace(/\/$/, '')}/?token=${encodeURIComponent(authToken)}`;
-  console.log('\n====================================================');
-  console.log(`  [Cloudflare 公网隧道已就绪] (${modeLabel})`);
-  console.log(`  公网地址   : ${publicUrl}`);
-  console.log(`  访问密码   : ${authToken}`);
-  console.log(`  免输密直连 : ${magicUrl}`);
-  console.log(`  高清二维码 : ${localQrPageUrl} (已在浏览器自动生成清晰二维码)`);
-  console.log('====================================================\n');
+function validateHostname(hostname: string): void {
+  if (!hostname) return;
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(hostname)) {
+    throw new Error('CF_HOSTNAME must be a hostname only, without a scheme, port or path.');
+  }
 }
 
-export async function startCloudflareTunnel(
-  options: TunnelOptions & { localQrPageUrl?: string }
-): Promise<ActiveTunnel> {
-  const binPath = await ensureBinary();
-  const localTarget = `http://127.0.0.1:${options.port}`;
-  const hostname = (options.hostname || 'codex.lmjjml.cc.cd').trim();
+export async function startCloudflareTunnel(options: TunnelOptions): Promise<ActiveTunnel> {
+  const hostname = (options.hostname || '').trim();
   const tunnelName = (options.tunnelName || 'codex-relay').trim();
   const tunnelToken = (options.tunnelToken || '').trim();
-  const certPath = getCloudflaredCertPath();
-  const qrPageUrl = options.localQrPageUrl || `http://localhost:${options.port}/qr`;
+  validateHostname(hostname);
+  if (tunnelToken && !hostname) throw new Error('Token mode requires the hostname configured for that tunnel. Set CF_HOSTNAME.');
+  const certificate = path.join(os.homedir(), '.cloudflared', 'cert.pem');
+  if (hostname && !tunnelToken && !fs.existsSync(certificate)) {
+    throw new Error('Custom-domain mode requires cloudflared login or CF_TUNNEL_TOKEN. Local access remains available.');
+  }
+  const binPath = await ensureBinary();
+  const localTarget = `http://127.0.0.1:${options.port}`;
+  let mode: ActiveTunnel['mode'] = 'quick-trycloudflare';
+  let url = '';
+  let args = ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', localTarget];
+  const childEnv = { ...process.env };
+  delete childEnv.RELAY_AUTH_TOKEN;
+  delete childEnv.RELAY_PIN;
+  delete childEnv.CF_TUNNEL_TOKEN;
+  // Do not inherit unrelated cloudflared settings from another local tunnel.
+  delete childEnv.TUNNEL_TOKEN;
+  delete childEnv.TUNNEL_TOKEN_FILE;
+  if (tunnelToken) {
+    mode = 'custom-token';
+    url = `https://${hostname}`;
+    childEnv.TUNNEL_TOKEN = tunnelToken;
+    args = ['tunnel', '--no-autoupdate', '--protocol', 'http2', 'run'];
+  } else if (hostname) {
+    await ensureNamedTunnelAndRoute(binPath, tunnelName, hostname, options.overwriteDns);
+    mode = 'custom-cert';
+    url = `https://${hostname}`;
+    args = ['tunnel', '--no-autoupdate', '--protocol', 'http2', 'run', '--url', localTarget, tunnelName];
+  }
 
   stopActiveTunnel();
-
-  // Mode 1: Zero Trust Tunnel Token provided
-  if (tunnelToken) {
-    const publicUrl = `https://${hostname}`;
-    const child = spawn(
-      binPath,
-      [
-        'tunnel',
-        '--no-autoupdate',
-        '--protocol',
-        'http2',
-        'run',
-        '--token',
-        tunnelToken,
-        '--url',
-        localTarget,
-      ],
-      { stdio: ['ignore', 'pipe', 'pipe'] }
-    );
-    activeTunnelProcess = child;
-
-    printTunnelBanner(publicUrl, options.authToken, `自定义域名 Token 模式: ${hostname}`, qrPageUrl);
-    return {
-      url: publicUrl,
-      mode: 'custom-token',
-      process: child,
-      stop: stopActiveTunnel,
-    };
-  }
-
-  // Mode 2: Named tunnel with ~/.cloudflared/cert.pem
-  if (fs.existsSync(certPath) && hostname) {
-    try {
-      await ensureNamedTunnelAndRoute(binPath, tunnelName, hostname);
-      const publicUrl = `https://${hostname}`;
-      const child = spawn(
-        binPath,
-        [
-          'tunnel',
-          '--no-autoupdate',
-          '--protocol',
-          'http2',
-          'run',
-          '--url',
-          localTarget,
-          tunnelName,
-        ],
-        { stdio: ['ignore', 'pipe', 'pipe'] }
-      );
-      activeTunnelProcess = child;
-
-      printTunnelBanner(publicUrl, options.authToken, `专属域名绑定: ${hostname}`, qrPageUrl);
-      return {
-        url: publicUrl,
-        mode: 'custom-cert',
-        process: child,
-        stop: stopActiveTunnel,
-      };
-    } catch (err: any) {
-      console.warn(
-        `[Cloudflare] 无法自动绑定自定义域名 ${hostname} (${err?.message || '未知错误'})，自动回退至临时公网隧道...`
-      );
-    }
-  } else if (hostname) {
-    console.log(`[Cloudflare] 尚未检测到授权证书 (~/.cloudflared/cert.pem)。`);
-    console.log(`   如需启用固定域名 https://${hostname}，可运行一次: npm run cf:login`);
-    console.log('   正在为你自动启动免配置 Cloudflare 临时公网隧道...');
-  }
-
-  // Mode 3: Quick Tunnel (trycloudflare.com)
-  const child = spawn(
-    binPath,
-    ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', localTarget],
-    {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }
-  );
+  const child = spawn(binPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: childEnv });
   activeTunnelProcess = child;
-
-  const publicUrl = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error('Cloudflare Tunnel 启动超时 (25s)'));
-    }, 25000);
-
-    const onOutput = (chunk: Buffer) => {
-      const text = chunk.toString();
-      const match = text.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
-      if (match) {
+  let ready = false;
+  let registered = false;
+  let output = '';
+  return new Promise<ActiveTunnel>((resolve, reject) => {
+    let settled = false;
+    const fail = (message: string) => {
+      ready = false;
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (activeTunnelProcess === child) stopActiveTunnel();
+      reject(new Error(message));
+    };
+    const timeout = setTimeout(() => fail('Tunnel did not report a registered connection before the startup timeout.'), options.timeoutMs ?? 30000);
+    const readOutput = (chunk: Buffer) => {
+      output = (output + chunk.toString()).slice(-32768);
+      if (!hostname) {
+        const match = output.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
+        if (match) url = match[0];
+      }
+      if (/Registered tunnel connection/i.test(output)) registered = true;
+      if (!settled && url && registered) {
+        settled = true;
+        ready = true;
         clearTimeout(timeout);
-        child.stdout?.off('data', onOutput);
-        child.stderr?.off('data', onOutput);
-        resolve(match[0]);
+        console.log(`[Cloudflare] Registered connection (${mode}). Open the local /qr page to pair your device.`);
+        resolve({
+          url, mode, process: child,
+          isReady: () => ready && !child.killed && child.exitCode === null,
+          stop: () => { ready = false; if (activeTunnelProcess === child) stopActiveTunnel(); },
+        });
       }
     };
-
-    child.stdout?.on('data', onOutput);
-    child.stderr?.on('data', onOutput);
-    child.once('exit', (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`cloudflared exited early with code ${code}`));
+    // Keep draining both streams after startup; do not print credential-bearing
+    // URLs or arbitrary subprocess output to the application console.
+    child.stdout?.on('data', readOutput);
+    child.stderr?.on('data', readOutput);
+    child.once('error', () => fail('Unable to start cloudflared. Check the installed binary and local permissions.'));
+    child.once('exit', () => {
+      ready = false;
+      if (activeTunnelProcess === child) activeTunnelProcess = null;
+      fail('Cloudflared exited before a usable connection was established.');
     });
   });
-
-  printTunnelBanner(publicUrl, options.authToken, 'Quick Tunnel 临时公网域名', qrPageUrl);
-
-  return {
-    url: publicUrl,
-    mode: 'quick-trycloudflare',
-    process: child,
-    stop: stopActiveTunnel,
-  };
 }

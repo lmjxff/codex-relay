@@ -1,7 +1,7 @@
 {
   "name": "codex-relay",
-  "version": "0.2.0",
-  "description": "A lightweight mobile-friendly web bridge for remote-controlling local OpenAI Codex CLI with Cloudflare Tunnel custom domain, PIN lock, Git diff viewer, and one-tap approval.",
+  "version": "0.2.1",
+  "description": "A mobile-friendly bridge for supervising a local Codex CLI, with authenticated terminal streaming, Git previews and optional Cloudflare tunnels.",
   "main": "dist/index.js",
   "bin": {
     "codex-relay": "./dist/index.js"
@@ -11,7 +11,31 @@
     "start": "tsx src/index.ts",
     "cf:login": "tsx src/index.ts --cf-login",
     "build": "tsc",
-    "serve": "node dist/index.js"
+    "serve": "node dist/index.js",
+    "test": "npm run build && node --test tests/*.test.cjs",
+    "prepack": "npm run build"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "public",
+    ".env.example",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lmjxff/codex-relay.git"
+  },
+  "homepage": "https://github.com/lmjxff/codex-relay#readme",
+  "bugs": {
+    "url": "https://github.com/lmjxff/codex-relay/issues"
   },
   "keywords": [
     "openai",
@@ -30,20 +54,20 @@
   "author": "lmjxff",
   "license": "MIT",
   "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "cloudflared": "^0.7.0",
     "diff2html": "^3.4.48",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "node-pty": "^1.0.0",
     "qrcode": "^1.5.4",
-    "qrcode-terminal": "^0.12.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",
     "@types/qrcode": "^1.5.6",
-    "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.5.13",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

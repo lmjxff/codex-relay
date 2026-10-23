@@ -18,6 +18,10 @@
   const promptInput = document.getElementById('prompt-input');
   const btnRestart = document.getElementById('btn-restart');
   const btnRefreshDiff = document.getElementById('btn-refresh-diff');
+  const promptStatus = document.getElementById('prompt-status');
+  const btnSend = document.getElementById('btn-send');
+  const btnQr = document.getElementById('btn-qr');
+  if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(window.location.hostname)) btnQr.hidden = true;
 
   let activeTab = 'terminal';
   let selectedFile = '';
@@ -26,6 +30,20 @@
   let pollTimer = null;
   let authToken = '';
   let isAuthenticated = false;
+  let pendingPrompt = null;
+  let pendingTimer = null;
+
+  function setPromptStatus(message, sending = false) {
+    promptStatus.textContent = message;
+    btnSend.disabled = sending;
+  }
+
+  function preservePendingPrompt(message) {
+    if (pendingTimer) clearTimeout(pendingTimer);
+    pendingTimer = null;
+    if (pendingPrompt) pendingPrompt.waiting = false;
+    setPromptStatus(message);
+  }
 
   // Initialize xterm.js terminal
   const term = new window.Terminal({
@@ -99,11 +117,13 @@
       pollTimer = null;
     }
     if (ws) {
-      try {
-        ws.close();
-      } catch {}
+      const previous = ws;
       ws = null;
+      try {
+        previous.close();
+      } catch {}
     }
+    preservePendingPrompt('');
     wsDot.classList.remove('connected');
     setTimeout(() => authTokenInput.focus(), 80);
   }
@@ -189,19 +209,36 @@
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(authToken)}`;
-    ws = new WebSocket(wsUrl);
+    if (ws) {
+      const previous = ws;
+      ws = null;
+      previous.close();
+    }
+    const connection = new WebSocket(wsUrl);
+    ws = connection;
 
-    ws.addEventListener('open', () => {
+    connection.addEventListener('open', () => {
+      if (ws !== connection) return;
       wsDot.classList.add('connected');
       wsDot.title = 'WebSocket Connected (Authenticated)';
       setTimeout(fitTerminal, 80);
     });
 
-    ws.addEventListener('message', (event) => {
+    connection.addEventListener('message', (event) => {
+      if (ws !== connection) return;
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'output' && typeof msg.data === 'string') {
+        if (msg.type === 'history' && typeof msg.data === 'string') {
+          term.reset();
           term.write(msg.data);
+        } else if (msg.type === 'output' && typeof msg.data === 'string') {
+          term.write(msg.data);
+        } else if (msg.type === 'input-ack' && pendingPrompt && msg.id === pendingPrompt.id) {
+          if (promptInput.value === pendingPrompt.text) promptInput.value = '';
+          pendingPrompt = null;
+          preservePendingPrompt('已发送到终端');
+        } else if (msg.type === 'input-error' && pendingPrompt && msg.id === pendingPrompt.id) {
+          preservePendingPrompt('发送未成功，输入已保留，请检查终端后重试');
         } else if (msg.type === 'status') {
           if (msg.cwd) {
             cwdLabel.textContent = msg.cwd;
@@ -213,7 +250,10 @@
       }
     });
 
-    ws.addEventListener('close', () => {
+    connection.addEventListener('close', () => {
+      if (ws !== connection) return;
+      ws = null;
+      if (pendingPrompt) preservePendingPrompt('连接已断开，输入已保留；重连后可重试');
       wsDot.classList.remove('connected');
       wsDot.title = 'Disconnected — Reconnecting...';
       if (isAuthenticated) {
@@ -221,8 +261,8 @@
       }
     });
 
-    ws.addEventListener('error', () => {
-      ws.close();
+    connection.addEventListener('error', () => {
+      connection.close();
     });
   }
 
@@ -255,11 +295,25 @@
     if (!isAuthenticated) return;
     const text = promptInput.value;
     if (!text.trim()) return;
+    if (pendingPrompt?.waiting) return;
     hapticFeedback(20);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'input', data: `${text}\r` }));
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setPromptStatus('尚未连接，输入已保留，请等待重连');
+      return;
     }
-    promptInput.value = '';
+    if (text.length >= 16 * 1024) {
+      setPromptStatus('输入过长，请拆分为少于 16K 字符的消息');
+      return;
+    }
+    const id = pendingPrompt?.text === text ? pendingPrompt.id : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    pendingPrompt = { id, text, waiting: true };
+    setPromptStatus('发送中…', true);
+    try {
+      ws.send(JSON.stringify({ type: 'input', id, data: `${text}\r` }));
+      pendingTimer = setTimeout(() => preservePendingPrompt('尚未收到确认，输入已保留；查看终端后可重试'), 7000);
+    } catch {
+      preservePendingPrompt('连接不可用，输入已保留');
+    }
     if (activeTab !== 'terminal') {
       switchTab('terminal');
     }
@@ -312,7 +366,7 @@
     if (!isAuthenticated) return;
     try {
       const statusRes = await authFetch('/api/git/status');
-      if (!statusRes.ok) return;
+      if (!statusRes.ok) throw new Error('Git status unavailable');
       const statusData = await statusRes.json();
 
       if (statusData.ok) {
@@ -341,6 +395,7 @@
   }
 
   function renderFileChips(files) {
+    if (selectedFile && !files.some(item => item.file === selectedFile)) selectedFile = '';
     fileChipsContainer.innerHTML = '';
 
     const allChip = document.createElement('button');
@@ -375,17 +430,28 @@
       const data = await res.json();
 
       if (!data.ok) {
-        diffContainer.innerHTML = `<div class="empty-state">${data.error || 'Error loading diff'}</div>`;
+        diffContainer.textContent = data.error || 'Error loading diff';
         return;
       }
 
-      if (!data.hasChanges || !data.html) {
+      if (!data.hasChanges) {
         diffContainer.innerHTML =
           '<div class="empty-state">✨ Working tree clean — no uncommitted changes to preview.</div>';
         return;
       }
 
+      if (!data.html) {
+        diffContainer.textContent = 'Changes exist, but no text preview is available. Check the file list and local Git diff.';
+        return;
+      }
+
       diffContainer.innerHTML = data.html;
+      if (data.omittedFiles?.length) {
+        const notice = document.createElement('p');
+        notice.className = 'preview-notice';
+        notice.textContent = `Preview omitted: ${data.omittedFiles.map(item => `${item.file} (${item.reason})`).join(', ')}`;
+        diffContainer.prepend(notice);
+      }
     } catch {
       diffContainer.innerHTML =
         '<div class="empty-state">Failed to fetch diff preview.</div>';

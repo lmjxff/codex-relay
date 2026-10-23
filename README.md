@@ -1,116 +1,207 @@
-# 🚀 codex-relay
+# Codex Relay
 
-> **专为手机端远程控制本地 OpenAI Codex CLI、支持 Cloudflare Tunnel 外网穿透、双端查看代码 Diff 并一键审批的轻量级开源桥接器。**  
-> A lightweight mobile-first web bridge for remote-controlling local OpenAI Codex CLI with Cloudflare Tunnel custom domain support, PIN/Token security lock, HD SVG QR code launchpad, real-time `xterm.js` streaming, `diff2html` Git Diff preview, and thumb-friendly one-tap approval.
+[English](README.md) | [简体中文](README.zh-CN.md)
 
----
+Follow a local Codex CLI session from your phone browser, send terminal input, and inspect Git changes. Relay provides a shared terminal, a mobile prompt bar, Git previews, and optional Cloudflare Tunnel connectivity.
 
-## ✨ 核心特性 (Features)
+**Local access only by default. No domain or Cloudflare account is needed to start.** This is an independent community project, not an official OpenAI product.
 
-- **🌍 内置 Cloudflare Tunnel 内网穿透 + 自动 DNS 路由**：
-  - 支持直接绑定你的自定义 Cloudflare 二级域名（默认配置 `codex.lmjjml.cc.cd`，可在 `.env` 修改为任意子域名，无需手动去 Cloudflare 后台建解析，程序启动时自动创建 CNAME 路由）。
-  - 若尚未执行首次域名授权，自动无缝回退至 `*.trycloudflare.com` 临时公网加密隧道，开箱即用。
-- **📱 浏览器高清矢量二维码面板 (`/qr`)**：
-  - 启动服务时自动在电脑浏览器弹出 `http://localhost:3210/qr` 高清双二维码面板（同时提供 **🌍 外网 4G/5G 远程连接码** 与 **📶 局域网 Wi-Fi 秒连码**），彻底解决 Windows 终端字符二维码变形无法识别的问题。
-  - 手机相机或浏览器扫一扫即可**免输密码一键自动登录**。
-- **🔒 三重安全防护机制**：
-  1. **网页端 PIN / Token 密码锁**：未授权访问会被全屏毛玻璃安全锁拦截；支持在 `.env` 配置 `RELAY_AUTH_TOKEN` 或首次启动时设定 PIN 码（自动持久化至 `.env`）；扫码进入后自动抹除地址栏 `?token=` 参数防止截图泄密；内置同 IP 连续输错防爆破限流（8 次失败封禁 5 分钟）与常量时间哈希比对 (`crypto.timingSafeEqual`)。
-  2. **WebSocket 连接级隔离**：每次建立 `/ws` 双向流连接时在底层 HTTP `upgrade` 握手阶段强制校验 Token，严厉拒绝任何未授权陌生 IP 连接（直接返回 `401 Unauthorized` 并销毁底层 Socket）。
-  3. **进程生命周期强绑定**：当你在电脑上关闭终端或按 `Ctrl+C` 退出时，自动立即销毁 `cloudflared` 隧道进程与 `node-pty` 进程，公网链接瞬间失效，杜绝后台残留暴露风险。
-- **🖥️ 实时终端双向流 (`node-pty` + `ws` + `xterm.js`)**：在本地托管 OpenAI `codex` CLI 终端会话，内置 64KB 环形输出缓存，手机切后台或锁屏重连后自动恢复上下文。
-- **👍 专为单手握持设计的大号拇指审批区**：下半屏配备超大尺寸 **`[Approve (y)]`** 与 **`[Reject (n)]`** 按钮（带手机触觉震动反馈）。
-- **🔀 红绿色块代码 Diff 预览 (`diff2html`)**：内置 `[Git Diff]` 标签页，实时展示工作区红绿高亮代码差异（含未跟踪新文件预览）并支持按文件筛选。
+## Features and boundaries
 
----
+- Authenticated terminal streaming using node-pty, WebSocket, and xterm.js.
+- Prompt drafts stay until the server acknowledges writing them to the terminal. Uncertain retries reuse an input ID to reduce duplicate delivery.
+- Git previews include staged/unstaged changes and untracked files inside new directories, including Unicode filenames.
+- A local pairing page shows QR codes only for enabled LAN access or a registered public tunnel.
+- Browser scripts/styles are served locally, without a third-party CDN.
+- Optional temporary Cloudflare URLs, your own domain, or a dashboard-managed tunnel token.
 
-## 🚀 快速开始 (Quick Start)
+**Approve (y)** / **Reject (n)** send `y` / `n` followed by Enter to whichever program is running. These are terminal shortcuts, not approvals bound to a particular Codex request. Read the terminal prompt before using them.
 
-### 1. 克隆并安装依赖
+## Requirements
+
+- Node.js 22 or 24, npm, and Git on `PATH`.
+- Codex CLI installed and signed in separately on the computer. Verify `codex --version` and a local session first; see the [official CLI instructions](https://developers.openai.com/codex/cli).
+- Windows with ConPTY support, macOS, or Linux. Native `node-pty` installation may need platform build tools.
+- Public tunnels additionally need cloudflared/network connectivity. Custom domains must belong to your Cloudflare account.
+
+## Quick start: this computer
 
 ```bash
 git clone https://github.com/lmjxff/codex-relay.git
 cd codex-relay
-npm install
+npm ci
 ```
 
-### 2. 首次授权绑定你的 Cloudflare 域名（如 `lmjjml.cc.cd`）
+Copy the configuration:
 
-**方式 A：一行命令网页授权（最推荐，仅需首次执行一次）**
+```powershell
+# Windows PowerShell
+Copy-Item .env.example .env
+```
+
+```bash
+# macOS / Linux
+cp .env.example .env
+```
+
+In your local `.env`, set `CODEX_CWD` to your project's absolute path, such as `C:/work/my-project` or `/home/me/my-project`. If omitted, Relay uses its launch directory.
+
+```bash
+npm start
+```
+
+On first startup, a blank `RELAY_AUTH_TOKEN` is replaced with a random 256-bit credential saved in `.env`. The browser opens [the local pairing page](http://localhost:3210/qr). Follow its desktop-console link, or enter the credential in the login screen. Credentials are not printed to the console.
+
+Defaults are `HOST=127.0.0.1` and `ENABLE_TUNNEL=false`: only this computer can connect, and no LAN/public QR code is generated. Keep the process running; Ctrl+C stops Relay.
+
+For compiled JavaScript, use `npm run build` then `npm run serve`. `npm run dev` watches source changes. These instructions use a Git checkout and do not assume a published npm package.
+
+## Connect a phone
+
+Choose a mode, edit **local `.env`**, and restart. Your personal domain does not belong in the committed example or README.
+
+### Same trusted Wi-Fi
+
+```dotenv
+HOST=0.0.0.0
+ENABLE_TUNNEL=false
+```
+
+Scan the LAN code on the computer's `http://localhost:3210/qr` page. Allow the port through the host firewall for your trusted private network. Guest Wi-Fi/client isolation may prevent connection. LAN HTTP is unencrypted; use only a network you trust.
+
+With multiple network adapters, the suggested IP may be wrong. Open `http://YOUR_LAN_IP:3210/` manually on the phone and enter the credential instead.
+
+### Temporary public URL: no domain required
+
+```dotenv
+HOST=127.0.0.1
+ENABLE_TUNNEL=true
+CF_HOSTNAME=
+CF_TUNNEL_TOKEN=
+```
+
+Keep the generated long Relay credential. Relay waits for both a `*.trycloudflare.com` URL and a registered tunnel connection before offering a public QR code. Refresh local `/qr` and scan it. The URL can change each restart.
+
+cloudflared may be downloaded during installation or when first needed. If a tunnel fails, local access remains available. Public reachability depends on your network and Cloudflare; see [Quick Tunnels](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+
+### Your own domain: certificate mode
+
+Authorize a Cloudflare domain you control:
 
 ```bash
 npm run cf:login
 ```
 
-运行后会自动弹出浏览器 Cloudflare 授权页，选择你的主域名（如 **`lmjjml.cc.cd`**）并点击 **Authorize**。授权证书会自动保存在 `~/.cloudflared/cert.pem`。  
-此后每次启动 `codex-relay`，程序都会自动创建命名隧道并将子域名（如 **`https://codex.lmjjml.cc.cd`**）自动配置好 DNS CNAME 解析并指向你的本地服务！
+Configure:
 
-**方式 B：使用 Cloudflare Zero Trust 后台 Token**
-
-如果你在 Cloudflare Zero Trust 控制台手动管理 Tunnel，只需在 `.env` 中填入：
-
-```env
-CF_HOSTNAME=codex.lmjjml.cc.cd
-CF_TUNNEL_TOKEN=eyJhIjoi...
+```dotenv
+HOST=127.0.0.1
+ENABLE_TUNNEL=true
+CF_HOSTNAME=codex.example.com
+CF_TUNNEL_NAME=codex-relay
+CF_TUNNEL_TOKEN=
+CF_OVERWRITE_DNS=false
 ```
 
-> 💡 **免配置体验**：即使你还没执行 `npm run cf:login`，直接运行 `npm start` 也会自动生成一个免配置的 `https://xxxx.trycloudflare.com` 临时公网加密链接与二维码！
+Replace `codex.example.com` with **your own hostname**, without `https://`, a port, or a path. The certificate normally lives in `~/.cloudflared/cert.pem`. Relay creates/reuses a named tunnel and creates its Cloudflare DNS route. This mode changes your Cloudflare tunnel/DNS configuration.
 
-### 3. 一键启动服务与手机扫码连接
+Existing DNS records are preserved by default. Resolve a conflict yourself, or set `CF_OVERWRITE_DNS=true` if replacement is intended. Authorization/DNS failure leaves public access unavailable; it does not silently fall back to another domain.
+
+### Dashboard-managed tunnel: token mode
+
+Configure the published hostname in the Cloudflare dashboard and set its service URL to `http://127.0.0.1:3210` (adjust for a different `PORT`). Put its tunnel token in **local `.env` only**:
+
+```dotenv
+HOST=127.0.0.1
+ENABLE_TUNNEL=true
+CF_HOSTNAME=codex.example.com
+CF_TUNNEL_TOKEN=<your-dashboard-tunnel-token>
+```
+
+Relay requires the configured hostname and does not create dashboard routes in this mode. The tunnel credential is passed via the child environment's `TUNNEL_TOKEN`, not command-line arguments. The Cloudflare tunnel token and the Relay browser credential are different secrets.
+
+## Daily use and limits
+
+1. **Send** keeps text during disconnection or until acknowledgement. An acknowledgement means the PTY accepted a write, not that Codex finished. Inspect the terminal before retrying uncertain delivery. Deduplication lasts up to five minutes with a bounded in-memory cache; it does not guarantee exactly-once delivery across server restarts.
+2. **Git Diff** includes new directories and per-file filtering. Untracked files over 256 KiB are listed as omitted; binary files have no text preview. Overall Git output above 10 MiB can return an error. Use local Git for a complete review.
+3. **Restart** terminates the shared terminal and starts another. All browsers control the same session.
+4. Reconnection replaces the display with the most recent 64 Ki characters of output. This memory-only tail is not persistent/full history and may start mid-line or mid-escape sequence.
+5. **Lock** removes this browser's saved credential. It does not revoke other browsers or rotate the server credential.
+
+## Configuration
+
+`.env` is loaded from the **launch directory**. Existing process environment variables take precedence. See [`.env.example`](.env.example).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HOST` | `127.0.0.1` | Bind address. `0.0.0.0` enables LAN; use loopback for tunnel-only access. |
+| `PORT` | `3210` | HTTP/WebSocket port, 1–65535. |
+| `RELAY_AUTH_TOKEN` | Generated locally | Shared access credential; 24+ characters for public tunnels. Single line, maximum 256 characters. Prefer the generated value. |
+| `RELAY_PIN` | Unset | Legacy fallback when the main credential is empty. Short PINs are discouraged and cannot enable public tunnels. |
+| `CODEX_CWD` | Launch directory | Absolute workspace path, ideally a Git working tree. |
+| `CODEX_CMD` | `codex` | Trusted local shell command executed as the host user. |
+| `AUTO_START_CODEX` | `true` | Automatically type the command into each new shell; `false` starts a shell only. |
+| `AUTO_OPEN_QR` | `true` | Open the local pairing page after startup/tunnel setup. |
+| `ENABLE_TUNNEL` | `false` | Explicitly enable cloudflared. |
+| `CF_HOSTNAME` | Empty | Hostname you own; empty selects a temporary URL without a tunnel token. |
+| `CF_TUNNEL_NAME` | `codex-relay` | Certificate-mode tunnel name. |
+| `CF_TUNNEL_TOKEN` | Empty | Dashboard tunnel credential; requires a hostname. |
+| `CF_OVERWRITE_DNS` | `false` | Permit replacing existing DNS in certificate mode. |
+
+### Upgrade from 0.2.0
+
+- Remove the former author's domain from local `.env`. Leave the hostname blank for a temporary tunnel, or use a domain you control.
+- The new defaults allow local access only. An existing `.env` keeps its explicit `HOST`/`ENABLE_TUNNEL` choices; copying defaults does not override process environment variables.
+- To rotate an old short PIN, stop Relay, clear `RELAY_AUTH_TOKEN` and remove `RELAY_PIN` from local `.env`/process environment, then restart to generate a long credential. Previous links/browser logins stop working after rotation and restart.
+- Public tunnels require 24+ character Relay credentials. Do not publish `/qr` screenshots, credential-bearing URLs, or `.env`.
+
+## Security model
+
+**Authenticated browsers control a real shell with the host user's permissions.** Relay does not sandbox the shell or restrict it to Codex/Git commands. Use an unprivileged account and a workspace you intend to expose. Codex's own execution policies do not protect the surrounding shell.
+
+Credentials have no automatic expiry. QR codes/URLs contain the credential; browsers store it in localStorage. Removing the query token from the visible address bar does not erase browser history, proxy logs, or copied URLs. Use trusted devices and HTTPS for public access. Rotate a leaked credential and restart Relay to close existing sessions.
+
+Local `/qr` bypasses login only for loopback connections with a local Host and no forwarded headers. Other requests require authentication. HTTP APIs and WebSocket upgrades authenticate; eight failures block an address for the remainder of a five-minute window. Forwarded headers from direct clients cannot select a different rate-limit bucket. Cloudflare client IPs are trusted only from loopback with tunnel mode enabled; do not place an untrusted local proxy in that boundary. Rate limiting supplements a strong credential.
+
+Normal shutdown attempts to stop the terminal/tunnel and close clients. Forced kills or OS crashes are outside that cleanup guarantee; inspect for remaining cloudflared processes after recovery. See [SECURITY.md](SECURITY.md).
+
+## API overview
+
+Scripts should prefer `Authorization: Bearer <relay-credential>` or `x-relay-token: <relay-credential>` over query tokens. Use HTTPS remotely and remove credentials from issue reports.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/auth/verify` | Rate-limited verification: JSON `{ "token": "<relay-credential>" }`. |
+| `GET /api/health` | Authenticated terminal/workspace/tunnel status. |
+| `GET /api/qr` | Authenticated pairing payload, including the credential. Unavailable public/LAN URLs are `null`. |
+| `GET /api/git/status` | Authenticated branch and per-file status. |
+| `GET /api/git/diff?file=<encoded-path>` | Authenticated raw/HTML preview, `hasChanges`, `omittedFiles`; optional file filter. |
+| `POST /api/action` | Authenticated `action`: `approve`, `reject`, `enter`, `esc`, `ctrl_c`, `start_codex`. |
+| `/ws` | Authenticated stream; browser query token or script auth header. Foreign browser origins are rejected. |
+
+WebSocket outputs include `status`, `history`, `output`. Send `{ "type": "input", "id": "<unique-id>", "data": "..." }` for `input-ack`/`input-error` with that ID. Input limit: 16 Ki characters; frame limit: 128 KiB. Direct keystrokes without IDs remain supported. Other messages: `resize`, `action`, `restart`, `ping`.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| Native install fails | Use Node 22/24. Source builds need Python and C++ tools: Visual Studio Build Tools on Windows, Command Line Tools on macOS, make/G++ on Linux. See [node-pty prerequisites](https://github.com/microsoft/node-pty#dependencies). |
+| `codex` missing in terminal | Check the host user's PATH, CLI installation/sign-in, and `CODEX_CMD`. Run locally first. |
+| Git status fails | Check Git installation, permissions, and that `CODEX_CWD` is a Git working tree. |
+| LAN phone cannot connect | Check `HOST`, LAN IP, firewall, same network, and Wi-Fi client isolation. |
+| No public QR | Check tunnel opt-in, long Relay credential, cloudflared connectivity, authorization/DNS routes; refresh `/qr`. |
+| Login returns 429 | Wait for the five-minute failure window; check the credential locally. |
+| Restart interrupts work | This is one shared in-memory terminal, not a persistent task scheduler. |
+
+## Development and verification
 
 ```bash
-# 标准启动
-npm start
-
-# 或开发热重载模式
-npm run dev
-
-# 或编译后通过 npx 启动
-npm run build
-npx codex-relay
+npm ci --ignore-scripts
+npm rebuild node-pty
+npm test
+npm pack --dry-run
 ```
 
-启动流程：
-1. **首次安全设置**：若 `.env` 中尚未设置 `RELAY_AUTH_TOKEN`，首次启动会提示你输入自定义 PIN 码（直接回车则自动生成 6 位安全数字 PIN 并保存至 `.env`，后续启动自动沿用）。
-2. **自动弹出高清二维码页**：服务启动后会自动在电脑浏览器打开 **`http://localhost:3210/qr`**（也可随时点击控制台右上角 **`📱 扫码`** 按钮打开），页面包含：
-   - **🌍 外网 4G/5G 远程连接二维码**：出门在外使用手机流量扫码即连（注：国内移动网络裸连海外 Cloudflare 节点若遇阻断或超时，开启手机端代理软件即可秒开）。
-   - **📶 同一 Wi-Fi 局域网秒连二维码**：在家或办公室连同一 Wi-Fi 时扫码，零延迟直连。
-3. **扫码即用**：手机扫码后自动完成 Token 校验并隐藏地址栏密码参数，直接进入终端与 Diff 审批界面；点击右上角 **`🔒`** 按钮可随时手动锁定退出。
+Tests cover Git fixtures, authentication/rate limits, HTTP/WebSocket behavior, draft acknowledgement/reconnection, PTY lifecycle, a harmless native command, and simulated tunnel/DNS lifecycle. They do not create real DNS records, open public tunnels, or log into Codex. CI targets Windows/macOS/Linux with Node 22/24; consult the actual workflow result. Phone browsers, Codex interactive prompts, and public network reachability need separate end-to-end checks.
 
----
-
-## ⚙️ 环境变量配置 (`.env`)
-
-可复制 [`.env.example`](./.env.example) 为 `.env` 进行自定义配置：
-
-| 变量名 | 默认值 | 说明 |
-| :--- | :--- | :--- |
-| `RELAY_AUTH_TOKEN` | 首次启动设定/自动生成 | 网页端与 WebSocket 必须校验的访问密码 / PIN 码 |
-| `ENABLE_TUNNEL` | `true` | 是否在启动时自动拉起 Cloudflare Tunnel 公网穿透 |
-| `AUTO_OPEN_QR` | `true` | 启动时是否在电脑浏览器自动打开 `/qr` 高清扫码页面 |
-| `CF_HOSTNAME` | `codex.lmjjml.cc.cd` | 绑定的 Cloudflare 自定义二级域名 |
-| `CF_TUNNEL_NAME` | `codex-relay` | Cloudflare 命名隧道名称 |
-| `CF_TUNNEL_TOKEN` | 空 | 可选：Cloudflare Zero Trust 隧道 Token |
-| `PORT` | `3210` | 本地 HTTP / WebSocket 监听端口 |
-| `HOST` | `0.0.0.0` | 绑定网卡地址（自动过滤 Mihomo/WSL 等虚拟网卡识别真实局域网 IP） |
-| `CODEX_CWD` | 当前工作目录 | 要让 Codex 操作的目标 Git 仓库路径 |
-| `CODEX_CMD` | `codex` | 启动后自动执行的 CLI 命令 |
-| `AUTO_START_CODEX` | `true` | 启动 PTY 后是否自动输入并执行 `CODEX_CMD` |
-
----
-
-## 📡 API 与页面路由说明
-
-- `GET /qr` — 电脑本机免密直达的高清双二维码扫码页（外网请求需携带有效 Token）。
-- `POST /api/auth/verify` — 校验访问密码 / PIN 码（带防暴力破解限流保护）。
-- `GET /api/qr` — 获取当前公网与局域网免密直连链接及 SVG 矢量二维码（需鉴权）。
-- `GET /api/health` — 查看 PTY 进程状态、PID、工作目录与公网隧道状态（需鉴权）。
-- `GET /api/git/status` — 获取当前分支及 `git status --porcelain=v1` 变更文件列表（需鉴权）。
-- `GET /api/git/diff?file=<optional>` — 获取 Unified Diff 文本及 `diff2html` 渲染的红绿色块 HTML（需鉴权）。
-- `POST /api/action` — 发送快捷动作（`approve` / `reject` / `enter` / `esc` / `ctrl_c` / `start_codex`，需鉴权）。
-- `WS /ws?token=<PIN>` — 终端实时双向流与尺寸同步（握手阶段强制校验 Token 隔离连接）。
-
----
-
-## 📄 License
-
-[MIT](./LICENSE)
+[Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [MIT license](LICENSE)
