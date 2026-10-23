@@ -109,6 +109,8 @@ Replace `codex.example.com` with **your own hostname**, without `https://`, a po
 
 Existing DNS records are preserved by default. Resolve a conflict yourself, or set `CF_OVERWRITE_DNS=true` if replacement is intended. Authorization/DNS failure leaves public access unavailable; it does not silently fall back to another domain.
 
+If the named tunnel and its DNS route are already configured, set `CF_MANAGE_DNS=false` to reuse them. Relay then only checks the existing tunnel and starts its connector; it neither creates a tunnel nor changes DNS. A missing tunnel fails instead of falling back to creation. Confirm the hostname already points to that tunnel before connecting. `CF_OVERWRITE_DNS` has no effect in reuse mode.
+
 ### Dashboard-managed tunnel: token mode
 
 Configure the published hostname in the Cloudflare dashboard and set its service URL to `http://127.0.0.1:3210` (adjust for a different `PORT`). Put its tunnel token in **local `.env` only**:
@@ -150,6 +152,7 @@ Relay requires the configured hostname and does not create dashboard routes in t
 | `CF_TUNNEL_NAME` | `codex-relay` | Certificate-mode tunnel name. |
 | `CF_TUNNEL_TOKEN` | Empty | Dashboard tunnel credential; requires a hostname. |
 | `CF_OVERWRITE_DNS` | `false` | Permit replacing existing DNS in certificate mode. |
+| `CF_MANAGE_DNS` | `true` | Certificate mode: `false` reuses an existing tunnel/DNS route without creating or modifying either. |
 
 ### Upgrade from 0.2.0
 

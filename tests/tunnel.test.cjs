@@ -7,7 +7,7 @@ const {EventEmitter}=require('node:events');
 const {PassThrough}=require('node:stream');
 const {fixture,cleanup,loadWithMocks}=require('./helpers.cjs');
 
-function harness(){
+function harness({failInfo=false}={}){
   const directory=fixture(),calls=[],commands=[];
   const binary=path.join(directory,'cloudflared');fs.writeFileSync(binary,'synthetic');
   fs.mkdirSync(path.join(directory,'.cloudflared'));fs.writeFileSync(path.join(directory,'.cloudflared','cert.pem'),'synthetic');
@@ -15,7 +15,7 @@ function harness(){
     const child=new EventEmitter();Object.assign(child,{stdout:new PassThrough(),stderr:new PassThrough(),exitCode:null,killed:false,
       kill(){this.killed=true;this.exitCode=0;this.emit('exit',0);}});
     calls.push({command,args,options,child});return child;
-  },execFile(command,args,options,callback){commands.push(args);callback(null,'','');}};
+  },execFile(command,args,options,callback){commands.push(args);callback(failInfo&&args.includes('info')?Error('Synthetic info failure'):null,'','');}};
   const api=loadWithMocks('tunnel.js',{'child_process':childProcess,'cloudflared':{bin:binary,install(){throw Error('Unexpected network download');}},
     'os':{...os,platform:()=> 'linux',homedir:()=>directory}});
   return {api,calls,commands,directory,async start(options){
@@ -64,4 +64,19 @@ test('custom certificate mode preserves DNS records unless overwrite is explicit
       child.stderr.write('Registered tunnel connection');assert.equal((await promise).mode,'custom-cert');
     }finally{h.close();}
   }
+});
+
+test('reuse mode connects an existing tunnel without creating a tunnel or touching DNS',async()=>{
+  const h=harness();try{
+    const {promise,child}=await h.start({hostname:'codex.example.com',manageDns:false,overwriteDns:true});
+    assert.deepEqual(h.commands,[['tunnel','info','codex-relay']]);
+    child.stderr.write('Registered tunnel connection');assert.equal((await promise).mode,'custom-cert');
+  }finally{h.close();}
+});
+
+test('reuse mode fails closed when its tunnel is unavailable, without attempting a create or route',async()=>{
+  const h=harness({failInfo:true});try{
+    await assert.rejects(h.api.startCloudflareTunnel({port:3210,hostname:'codex.example.com',manageDns:false}),/Existing named tunnel unavailable/);
+    assert.deepEqual(h.commands,[['tunnel','info','codex-relay']]);assert.equal(h.calls.length,0);
+  }finally{h.close();}
 });

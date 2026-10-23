@@ -109,6 +109,8 @@ CF_OVERWRITE_DNS=false
 
 默认不覆盖已有 DNS 记录。遇到冲突时，先自行处理记录；确实需要替换时，才设置 `CF_OVERWRITE_DNS=true`。授权或 DNS 失败会让公网入口保持不可用，不会悄悄换成另一个临时域名。
 
+如果命名隧道和 DNS 路由已经配置好，可设置 `CF_MANAGE_DNS=false` 复用。此时 Relay 只检查已有隧道并启动连接器，不创建隧道、不修改 DNS；找不到隧道时直接失败，不尝试创建。连接前先确认该主机名已指向此隧道。复用模式下 `CF_OVERWRITE_DNS` 不生效。
+
 ### Cloudflare 后台管理：Token 方式
 
 在 Cloudflare 后台配置隧道的公开主机名，并将服务地址设为 `http://127.0.0.1:3210`；如修改了 `PORT`，相应调整服务端口。隧道 Token **只写入本地 `.env`**：
@@ -150,6 +152,7 @@ CF_TUNNEL_TOKEN=<你在后台获取的隧道Token>
 | `CF_TUNNEL_NAME` | `codex-relay` | 证书模式使用的隧道名称。 |
 | `CF_TUNNEL_TOKEN` | 空 | 后台管理的隧道凭据，需同时配置主机名。 |
 | `CF_OVERWRITE_DNS` | `false` | 是否允许证书模式覆盖已有 DNS。 |
+| `CF_MANAGE_DNS` | `true` | 证书模式下设为 `false`，只复用已有隧道和 DNS 路由，不创建或修改。 |
 
 ### 从 0.2.0 升级
 

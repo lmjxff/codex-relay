@@ -14,6 +14,7 @@ export interface TunnelOptions {
   tunnelToken?: string;
   localQrPageUrl?: string;
   overwriteDns?: boolean;
+  manageDns?: boolean;
   timeoutMs?: number;
 }
 
@@ -114,7 +115,14 @@ export async function startCloudflareTunnel(options: TunnelOptions): Promise<Act
     childEnv.TUNNEL_TOKEN = tunnelToken;
     args = ['tunnel', '--no-autoupdate', '--protocol', 'http2', 'run'];
   } else if (hostname) {
-    await ensureNamedTunnelAndRoute(binPath, tunnelName, hostname, options.overwriteDns);
+    if (options.manageDns === false) {
+      // Reuse mode is read-only against the account: no tunnel creation or
+      // DNS routing command, even when the existing tunnel cannot be found.
+      try { await execFileAsync(binPath, ['tunnel', 'info', tunnelName], { windowsHide: true }); }
+      catch { throw new Error('Existing named tunnel unavailable. Check CF_TUNNEL_NAME and authorization; DNS management is disabled.'); }
+    } else {
+      await ensureNamedTunnelAndRoute(binPath, tunnelName, hostname, options.overwriteDns);
+    }
     mode = 'custom-cert';
     url = `https://${hostname}`;
     args = ['tunnel', '--no-autoupdate', '--protocol', 'http2', 'run', '--url', localTarget, tunnelName];

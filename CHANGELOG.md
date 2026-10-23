@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3 — 2026-10-23
+
+- Add certificate-mode `CF_MANAGE_DNS=false` to reuse an existing named tunnel and DNS route. This mode performs only the existing-tunnel check and connector startup, with no tunnel creation or DNS write, including on failure.
+- Document reuse mode in both languages and cover its success/failure paths with mocked regression tests.
+
+中文：新增复用已有 Cloudflare 隧道/域名路由的选项，连接测试无需再次创建隧道或写入 DNS。
+
 ## 0.2.2 — 2026-10-23
 
 - Keep every browser on one shared terminal grid sized for the smallest connected viewport. Restore a parsed server-side screen on reconnect/resize, with 1,000 lines of bounded scrollback, instead of replaying an arbitrary ANSI byte tail.

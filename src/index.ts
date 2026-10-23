@@ -45,6 +45,7 @@ const CF_HOSTNAME = (process.env.CF_HOSTNAME || '').trim();
 const CF_TUNNEL_NAME = process.env.CF_TUNNEL_NAME || 'codex-relay';
 const CF_TUNNEL_TOKEN = process.env.CF_TUNNEL_TOKEN || '';
 const CF_OVERWRITE_DNS = process.env.CF_OVERWRITE_DNS === 'true';
+const CF_MANAGE_DNS = process.env.CF_MANAGE_DNS !== 'false';
 
 let AUTH_TOKEN = (process.env.RELAY_AUTH_TOKEN || process.env.RELAY_PIN || '').trim();
 let activeTunnel: ActiveTunnel | null = null;
@@ -804,6 +805,7 @@ async function bootstrap(): Promise<void> {
           tunnelName: CF_TUNNEL_NAME,
           tunnelToken: CF_TUNNEL_TOKEN,
           overwriteDns: CF_OVERWRITE_DNS,
+          manageDns: CF_MANAGE_DNS,
           localQrPageUrl,
         });
         const tunnel = activeTunnel;
