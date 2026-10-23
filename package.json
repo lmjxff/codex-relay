@@ -1,0 +1,40 @@
+{
+  "name": "codex-relay",
+  "version": "0.1.0",
+  "description": "A lightweight mobile-friendly web bridge for remote-controlling local OpenAI Codex CLI with real-time terminal streaming, Git diff viewer, and one-tap approval.",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "serve": "node dist/index.js"
+  },
+  "keywords": [
+    "openai",
+    "codex",
+    "codex-cli",
+    "mobile",
+    "remote-control",
+    "terminal",
+    "node-pty",
+    "xterm",
+    "git-diff",
+    "diff2html",
+    "websocket"
+  ],
+  "author": "lmjxff",
+  "license": "MIT",
+  "dependencies": {
+    "diff2html": "^3.4.48",
+    "express": "^4.21.2",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
