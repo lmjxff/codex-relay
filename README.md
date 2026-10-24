@@ -23,9 +23,9 @@ Captured from the actual Relay web UI with an isolated sample CLI and Git worksp
 - Browser scripts/styles are served locally, without a third-party CDN.
 - Optional temporary Cloudflare URLs, your own domain, or a dashboard-managed tunnel token.
 
-**Approve (y)** / **Reject (n)** send `y` / `n` followed by Enter to whichever program is running. These are terminal shortcuts, not approvals bound to a particular Codex request. Read the terminal prompt before using them.
+**Send y + Enter** / **Send n + Enter** send `y` / `n` followed by Enter to whichever program is running. These are terminal shortcuts, not approvals bound to a particular Codex request. Read the terminal prompt before using them.
 
-A numbered menu inside the terminal is rendered text, not an HTML button. Tapping its text does not necessarily select it. Use the terminal keyboard or Relay's **Enter** button to confirm the currently highlighted option; use Approve/Reject only when the program expects those keys.
+A numbered menu inside the terminal is rendered text, not an HTML button. Tapping its text does not necessarily select it. Use **↑ Up** / **↓ Down** to select, then **Enter** to confirm the highlighted option. **Tab** sends a tab key. Use the y/n shortcuts only when the program expects those keys.
 
 ## Requirements
 

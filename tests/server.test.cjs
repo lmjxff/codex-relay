@@ -83,6 +83,15 @@ test('HTTP and WebSocket enforce auth, preserve Git paths and acknowledge input 
     client.send(JSON.stringify({type:'action',action:'approve'}));
     await waitFor(()=>processes[0].writes.length===2);
     assert.equal(processes[0].writes[1],process.platform==='win32'?'y\r':'y\n');
+    for (const [action,expected] of [['up','\x1b[A'],['down','\x1b[B'],['tab','\t']]) {
+      const count=processes[0].writes.length;
+      client.send(JSON.stringify({type:'action',action}));
+      await waitFor(()=>processes[0].writes.length===count+1);
+      assert.equal(processes[0].writes.at(-1),expected);
+      const response=await fetch(base+'/api/action',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({action})});
+      assert.equal(response.status,200);
+      assert.equal(processes[0].writes.at(-1),expected);
+    }
     processes[0].data('\x1b[H\x1b[2JWorking: approved\r\n');
     await waitFor(()=>[messages,otherMessages].every(list=>list.some(message=>message.type==='output'&&message.data.includes('Working: approved'))));
     client.send(JSON.stringify({type:'input',id:'oversize',data:'a'.repeat(16385)}));

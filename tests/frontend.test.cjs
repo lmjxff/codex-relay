@@ -6,12 +6,15 @@ const vm=require('node:vm');
 const {project}=require('./helpers.cjs');
 
 async function browser({delayedWrites=false}={}){
-  const elements=new Map(),sockets=[],timers=[],writes=[];
+  const elements=new Map(),sockets=[],timers=[],writes=[],actions=new Map();
   function element(){return {value:'',textContent:'',innerHTML:'',hidden:false,disabled:false,
     classList:{add(){},remove(){},toggle(){}},listeners:{},addEventListener(type,fn){this.listeners[type]=fn;},
-    appendChild(){},prepend(){},setAttribute(){},focus(){}};}
+    appendChild(){},prepend(){},setAttribute(){},getAttribute(name){return this[name];},focus(){}};}
+  for(const match of fs.readFileSync(path.join(project,'public','index.html'),'utf8').matchAll(/data-action="([^"]+)"/g)) {
+    const button=element();button['data-action']=match[1];actions.set(match[1],button);
+  }
   const document={getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},
-    querySelectorAll(){return [];},createElement:element,title:'Relay'};
+    querySelectorAll(selector){return selector==='[data-action]'?[...actions.values()]:[];},createElement:element,title:'Relay'};
   const terminal={cols:80,rows:24,output:'',resets:0,loadAddon(){},open(){},onData(){},clear(){},
     reset(){this.output='';this.resets++;},resize(cols,rows){this.cols=cols;this.rows=rows;},
     write(data,callback){const complete=()=>{this.output+=data;callback?.();};delayedWrites?writes.push(complete):complete();}};
@@ -35,8 +38,18 @@ async function browser({delayedWrites=false}={}){
       history:{replaceState(){}},addEventListener(){},Terminal:function(){return terminal;},FitAddon:{FitAddon:function(){this.proposeDimensions=()=>({cols:120,rows:35});}}}};
   vm.runInNewContext(fs.readFileSync(path.join(project,'public','app.js'),'utf8'),context);
   await new Promise(resolve=>setImmediate(resolve));
-  return {elements,sockets,timers,terminal,writes,submit(){elements.get('prompt-form').listeners.submit({preventDefault(){}});}};
+  return {elements,sockets,timers,terminal,writes,actions,submit(){elements.get('prompt-form').listeners.submit({preventDefault(){}});}};
 }
+
+test('mobile menu buttons send separate navigation and confirmation actions',async()=>{
+  const page=await browser(),socket=page.sockets[0];socket.open();
+  for(const action of ['up','down','tab','enter']) {
+    page.actions.get(action).listeners.click();
+    assert.equal(socket.sent.at(-1).type,'action');
+    assert.equal(socket.sent.at(-1).action,action);
+  }
+  assert.equal(socket.sent.length,4);
+});
 
 test('Send preserves disconnected drafts and clears only an acknowledged unchanged draft',async()=>{
   const page=await browser(),input=page.elements.get('prompt-input');

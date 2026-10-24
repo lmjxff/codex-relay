@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add mobile Up/Down/Tab shortcuts and label y/n buttons by the keys they send. Numbered menus can be navigated with arrows and confirmed separately with Enter.
+
+中文：新增手机方向键和 Tab，明确 y/n 按钮的实际含义；编号菜单先选择，再回车确认。
+
 ## 0.2.3 — 2026-10-23
 
 - Add certificate-mode `CF_MANAGE_DNS=false` to reuse an existing named tunnel and DNS route. This mode performs only the existing-tunnel check and connector startup, with no tunnel creation or DNS write, including on failure.

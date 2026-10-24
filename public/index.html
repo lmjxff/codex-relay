@@ -136,6 +136,11 @@
         <p id="prompt-status" class="prompt-status" role="status" aria-live="polite"></p>
 
         <!-- Auxiliary Terminal Keys -->
+        <div class="quick-keys navigation-keys" role="group" aria-label="Menu navigation">
+          <button type="button" class="key-btn" data-action="up" aria-label="Up arrow">↑ Up</button>
+          <button type="button" class="key-btn" data-action="down" aria-label="Down arrow">↓ Down</button>
+          <button type="button" class="key-btn" data-action="tab">Tab ⇥</button>
+        </div>
         <div class="quick-keys">
           <button type="button" class="key-btn" data-action="start_codex">
             🚀 Run codex
@@ -151,6 +156,8 @@
           </button>
         </div>
 
+        <p class="key-hint">Numbered menu: ↑ / ↓ to select, then Enter. Use y / n only when the prompt asks for them.</p>
+
         <!-- Giant Thumb Approval Buttons -->
         <div class="thumb-approval-grid">
           <button
@@ -160,8 +167,8 @@
             data-action="approve"
           >
             <span class="thumb-icon">✓</span>
-            <span class="thumb-title">Approve (y)</span>
-            <span class="thumb-subtitle">Send y + Enter to terminal</span>
+            <span class="thumb-title">Send y + Enter</span>
+            <span class="thumb-subtitle">For y/n prompts</span>
           </button>
 
           <button
@@ -171,8 +178,8 @@
             data-action="reject"
           >
             <span class="thumb-icon">✕</span>
-            <span class="thumb-title">Reject (n)</span>
-            <span class="thumb-subtitle">Send n + Enter to terminal</span>
+            <span class="thumb-title">Send n + Enter</span>
+            <span class="thumb-subtitle">For y/n prompts</span>
           </button>
         </div>
       </section>

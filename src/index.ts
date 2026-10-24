@@ -138,7 +138,7 @@ interface WsClientMessage {
   data?: string;
   cols?: number;
   rows?: number;
-  action?: 'approve' | 'reject' | 'enter' | 'esc' | 'ctrl_c' | 'start_codex';
+  action?: 'approve' | 'reject' | 'enter' | 'esc' | 'ctrl_c' | 'start_codex' | 'up' | 'down' | 'tab';
   id?: string;
 }
 
@@ -274,7 +274,7 @@ function spawnCodexPty(cols = 80, rows = 24): pty.IPty {
 }
 
 function sendTerminalAction(action: WsClientMessage['action']): void {
-  if (!action || !['approve', 'reject', 'enter', 'esc', 'ctrl_c', 'start_codex'].includes(action)) {
+  if (!action || !['approve', 'reject', 'enter', 'esc', 'ctrl_c', 'start_codex', 'up', 'down', 'tab'].includes(action)) {
     throw new Error('Unknown action');
   }
   if (!ptyProcess && action === 'start_codex') {
@@ -286,6 +286,15 @@ function sendTerminalAction(action: WsClientMessage['action']): void {
 
   const eol = os.platform() === 'win32' ? '\r' : '\n';
   switch (action) {
+    case 'up':
+      ptyProcess.write('\x1b[A');
+      break;
+    case 'down':
+      ptyProcess.write('\x1b[B');
+      break;
+    case 'tab':
+      ptyProcess.write('\t');
+      break;
     case 'approve':
       ptyProcess.write(`y${eol}`);
       break;
@@ -481,7 +490,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
 
 app.post('/api/action', (req: Request, res: Response) => {
   const action = req.body?.action as WsClientMessage['action'];
-  if (!action || !['approve', 'reject', 'enter', 'esc', 'ctrl_c', 'start_codex'].includes(action)) {
+  if (!action || !['approve', 'reject', 'enter', 'esc', 'ctrl_c', 'start_codex', 'up', 'down', 'tab'].includes(action)) {
     res.status(400).json({ ok: false, error: 'Unknown action' });
     return;
   }
