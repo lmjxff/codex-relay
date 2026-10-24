@@ -47,8 +47,49 @@ test('mobile menu buttons send separate navigation and confirmation actions',asy
     page.actions.get(action).listeners.click();
     assert.equal(socket.sent.at(-1).type,'action');
     assert.equal(socket.sent.at(-1).action,action);
+    socket.message({type:'action-ack',id:socket.sent.at(-1).id});
   }
   assert.equal(socket.sent.length,4);
+});
+
+test('shortcut feedback waits for acknowledgement and blocks rapid repeated clicks',async()=>{
+  const page=await browser(),socket=page.sockets[0];socket.open();
+  const button=page.actions.get('enter');button.listeners.click();
+  const frame=socket.sent.at(-1);assert(frame.id);
+  button.listeners.click();page.actions.get('down').listeners.click();
+  assert.equal(socket.sent.length,1);
+  assert(button.disabled);assert(page.elements.get('action-status').textContent.includes('正在发送'));
+  socket.message({type:'action-ack',id:'stale'});assert(button.disabled);
+  socket.message({type:'action-ack',id:frame.id});assert(!button.disabled);
+  assert(page.elements.get('action-status').textContent.includes('已写入终端'));
+  button.listeners.click();socket.message({type:'action-error',id:socket.sent.at(-1).id});
+  assert(page.elements.get('action-status').textContent.includes('操作失败'));assert(!button.disabled);
+});
+
+test('shortcut timeouts and disconnects report uncertain delivery without retrying',async()=>{
+  const page=await browser(),socket=page.sockets[0];socket.open();
+  page.actions.get('approve').listeners.click();
+  page.timers.find(timer=>timer.delay===7000).fn();
+  assert.equal(socket.sent.length,1);assert(page.elements.get('action-status').textContent.includes('是否送达未知'));
+  page.actions.get('enter').listeners.click();socket.close();
+  assert(page.elements.get('action-status').textContent.includes('是否送达未知'));
+  assert(page.elements.get('connection-status').textContent.includes('重连'));
+  assert(page.actions.get('enter').disabled);
+  page.actions.get('enter').listeners.click();assert.equal(socket.sent.length,2);
+  assert(page.elements.get('action-status').textContent.includes('未发送'));
+});
+
+test('ended terminals disable keys but allow an acknowledged explicit start',async()=>{
+  const page=await browser(),socket=page.sockets[0];socket.open();
+  socket.message({type:'status',running:false});
+  assert(page.actions.get('enter').disabled);assert(!page.actions.get('start_codex').disabled);
+  page.actions.get('enter').listeners.click();assert.equal(socket.sent.length,0);
+  page.actions.get('start_codex').listeners.click();const frame=socket.sent.at(-1);
+  socket.message({type:'session-reset',cols:80,rows:24});
+  socket.message({type:'status',running:true});
+  socket.message({type:'action-ack',id:frame.id});
+  assert(!page.actions.get('enter').disabled);
+  assert(page.elements.get('action-status').textContent.includes('已写入终端'));
 });
 
 test('Send preserves disconnected drafts and clears only an acknowledged unchanged draft',async()=>{

@@ -18,6 +18,7 @@
 
 - 使用 node-pty、WebSocket 和 xterm.js，在通过鉴权的浏览器中查看、操作本地终端。
 - 输入栏在收到服务端写入终端的确认前保留草稿；不确定是否送达时，重试沿用消息 ID，减少重复输入。
+- 快捷按钮等待服务端回执，等待期间阻止连续点击；断线、失败和送达不确定会明确提示，不自动重发快捷键。
 - 预览暂存区、工作区和未跟踪文件，包括新建目录中的文件与中文文件名。
 - 本地配对页只为已启用的局域网入口或已连接的公网隧道生成二维码。
 - 浏览器脚本和样式从本机提供，无需第三方 CDN。
@@ -200,12 +201,14 @@ npm start
 | `GET /api/qr` | 鉴权后获取包含凭据的配对数据；不可用的公网/局域网 URL 为 `null`。 |
 | `GET /api/git/status` | 鉴权后查询分支与逐文件状态。 |
 | `GET /api/git/diff?file=<编码后的路径>` | 鉴权后获取 HTML/原始 Diff、`hasChanges`、`omittedFiles`；可选文件筛选。 |
-| `POST /api/action` | 鉴权后发送 `action`：`approve`、`reject`、`enter`、`esc`、`ctrl_c`、`start_codex`。 |
+| `POST /api/action` | 鉴权后发送 `action`：`approve`、`reject`、`enter`、`esc`、`ctrl_c`、`start_codex`、`up`、`down`、`tab`。 |
 | `/ws` | 已鉴权终端流；浏览器使用查询 Token，脚本可用请求头；拒绝其他浏览器来源。 |
 
 WebSocket 输出包括 `status`、`history`、`output`、`session-reset`。历史/重置消息携带统一的 `cols` / `rows`，客户端应与终端输出按顺序处理。结束状态包含 `kind`（`normal` / `error` / `unknown`），以及可为 `null` 的 `exitCode` / `signal`。发送 `{ "type": "input", "id": "<唯一消息ID>", "data": "..." }` 可收到对应 ID 的 `input-ack` / `input-error`。输入最多 16 Ki 字符，单帧最多 128 KiB；仍兼容无 ID 的终端按键。其他消息为 `resize`、`action`、`restart`、`ping`。
 
 ## 常见问题
+
+快捷消息可携带 ID：`{ "type": "action", "id": "<唯一消息ID>", "action": "enter" }`，服务端返回 `action-ack` 或 `action-error`。回执只表示按键已写入 PTY，不代表程序已完成任务或批准请求。同一按键的重复 ID 会在有上限的内存缓存中抑制五分钟，重启会清空。回执丢失会提示送达不确定，请先查看终端再决定是否重按。升级服务端和网页后，请刷新所有浏览器。
 
 | 现象 | 检查方法 |
 | --- | --- |

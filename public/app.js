@@ -22,6 +22,9 @@
   const btnSend = document.getElementById('btn-send');
   const btnQr = document.getElementById('btn-qr');
   const terminalState = document.getElementById('terminal-state');
+  const connectionStatus = document.getElementById('connection-status');
+  const actionStatus = document.getElementById('action-status');
+  const actionButtons = [...document.querySelectorAll('[data-action]')];
   if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(window.location.hostname)) btnQr.hidden = true;
 
   let activeTab = 'terminal';
@@ -34,6 +37,8 @@
   let pendingPrompt = null;
   let pendingTimer = null;
   let terminalRunning = null;
+  let pendingAction = null;
+  let actionTimer = null;
   let lastViewportSize = '';
   const renderQueue = [];
   let rendering = false;
@@ -48,6 +53,23 @@
     pendingTimer = null;
     if (pendingPrompt) pendingPrompt.waiting = false;
     setPromptStatus(message);
+  }
+
+  function updateActionButtons() {
+    const connected = isAuthenticated && ws?.readyState === WebSocket.OPEN;
+    for (const button of actionButtons) {
+      button.disabled = !connected || Boolean(pendingAction) ||
+        (terminalRunning === false && button.getAttribute('data-action') !== 'start_codex');
+    }
+    btnRestart.disabled = !connected || Boolean(pendingAction);
+  }
+
+  function finishAction(message) {
+    if (actionTimer) clearTimeout(actionTimer);
+    actionTimer = null;
+    pendingAction = null;
+    actionStatus.textContent = message;
+    updateActionButtons();
   }
 
   // Initialize xterm.js terminal
@@ -159,6 +181,8 @@
       } catch {}
     }
     preservePendingPrompt('');
+    finishAction('');
+    connectionStatus.textContent = '未连接';
     wsDot.classList.remove('connected');
     setTimeout(() => authTokenInput.focus(), 80);
   }
@@ -252,12 +276,16 @@
     }
     const connection = new WebSocket(wsUrl);
     ws = connection;
+    connectionStatus.textContent = '连接中…';
+    updateActionButtons();
     lastViewportSize = '';
 
     connection.addEventListener('open', () => {
       if (ws !== connection) return;
       wsDot.classList.add('connected');
       wsDot.title = 'WebSocket Connected (Authenticated)';
+      connectionStatus.textContent = '已连接';
+      updateActionButtons();
       setTimeout(fitTerminal, 80);
     });
 
@@ -271,6 +299,7 @@
           renderTerminal(msg);
         } else if (msg.type === 'session-reset') {
           renderTerminal(msg);
+          if (pendingAction && pendingAction.action !== 'start_codex') finishAction('终端已重启，请检查终端后再操作');
           if (pendingPrompt) {
             pendingPrompt = null;
             preservePendingPrompt('终端已重启，输入已保留；请检查后重新发送');
@@ -281,6 +310,10 @@
           preservePendingPrompt('已发送到终端');
         } else if (msg.type === 'input-error' && pendingPrompt && msg.id === pendingPrompt.id) {
           preservePendingPrompt('发送未成功，输入已保留，请检查终端后重试');
+        } else if (msg.type === 'action-ack' && pendingAction && msg.id === pendingAction.id) {
+          finishAction('快捷键已写入终端；请查看程序响应');
+        } else if (msg.type === 'action-error' && pendingAction && msg.id === pendingAction.id) {
+          finishAction('操作失败，请检查终端状态后再试');
         } else if (msg.type === 'status') {
           if (typeof msg.running === 'boolean') {
             terminalRunning = msg.running;
@@ -294,6 +327,7 @@
             cwdLabel.textContent = msg.cwd;
             cwdLabel.title = msg.cwd;
           }
+          updateActionButtons();
         }
       } catch {
         // ignore invalid frames
@@ -303,6 +337,9 @@
     connection.addEventListener('close', () => {
       if (ws !== connection) return;
       ws = null;
+      if (pendingAction) finishAction('连接已断开，操作是否送达未知；请查看终端后再操作');
+      updateActionButtons();
+      connectionStatus.textContent = '连接断开，正在重连…';
       if (pendingPrompt) preservePendingPrompt('连接已断开，输入已保留；重连后可重试');
       wsDot.classList.remove('connected');
       wsDot.title = 'Disconnected — Reconnecting...';
@@ -318,21 +355,30 @@
 
   function sendAction(action) {
     if (!isAuthenticated) return;
-    hapticFeedback(action === 'approve' || action === 'reject' ? [30, 40, 30] : 20);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'action', action }));
-    } else {
-      authFetch('/api/action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      }).catch(() => {});
+    if (pendingAction) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      actionStatus.textContent = '尚未连接，未发送快捷键';
+      return;
     }
-    setTimeout(refreshGitStatusAndDiff, 600);
+    if (terminalRunning === false && action !== 'start_codex') {
+      actionStatus.textContent = '终端已关闭，请先启动或重启会话';
+      return;
+    }
+    hapticFeedback(action === 'approve' || action === 'reject' ? [30, 40, 30] : 20);
+    const id = `action-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    pendingAction = { id, action };
+    actionStatus.textContent = '正在发送快捷键…';
+    updateActionButtons();
+    try {
+      ws.send(JSON.stringify({ type: 'action', action, id }));
+      actionTimer = setTimeout(() => finishAction('尚未收到回执，操作是否送达未知；请查看终端后再操作'), 7000);
+    } catch {
+      finishAction('连接不可用，操作是否送达未知；请查看终端');
+    }
   }
 
   // Bind all buttons with data-action (Approve, Reject, Enter, Esc, Ctrl+C, Run codex)
-  document.querySelectorAll('[data-action]').forEach((btn) => {
+  actionButtons.forEach((btn) => {
     btn.addEventListener('click', () => {
       const action = btn.getAttribute('data-action');
       if (action) sendAction(action);

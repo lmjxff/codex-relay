@@ -93,6 +93,16 @@ test('HTTP and WebSocket enforce auth, preserve Git paths and acknowledge input 
       assert.equal(processes[0].writes.at(-1),expected);
     }
     processes[0].data('\x1b[H\x1b[2JWorking: approved\r\n');
+    const actionCount=processes[0].writes.length;
+    const shortcut={type:'action',action:'enter',id:'synthetic-action-1'};
+    client.send(JSON.stringify(shortcut));client.send(JSON.stringify(shortcut));
+    await waitFor(()=>messages.filter(message=>message.type==='action-ack'&&message.id===shortcut.id).length===2);
+    assert.equal(processes[0].writes.length,actionCount+1,'duplicate action IDs must not press the key twice');
+    client.send(JSON.stringify({...shortcut,action:'reject'}));
+    await waitFor(()=>messages.some(message=>message.type==='action-error'&&message.id===shortcut.id));
+    assert.equal(processes[0].writes.length,actionCount+1);
+    client.send(JSON.stringify({type:'action',action:'not-a-key',id:'invalid-action'}));
+    await waitFor(()=>messages.some(message=>message.type==='action-error'&&message.id==='invalid-action'));
     await waitFor(()=>[messages,otherMessages].every(list=>list.some(message=>message.type==='output'&&message.data.includes('Working: approved'))));
     client.send(JSON.stringify({type:'input',id:'oversize',data:'a'.repeat(16385)}));
     await waitFor(()=>messages.some(message=>message.type==='input-error'&&message.id==='oversize'));
@@ -107,6 +117,8 @@ test('HTTP and WebSocket enforce auth, preserve Git paths and acknowledge input 
     await waitFor(()=>messages.some(message=>message.type==='status'&&message.running===false));
     const stopped=messages.find(message=>message.type==='status'&&message.running===false);
     assert.equal(stopped.kind,'unknown');assert.equal(stopped.exitCode,null);
+    client.send(JSON.stringify({type:'action',action:'enter',id:'ended-action'}));
+    await waitFor(()=>messages.some(message=>message.type==='action-error'&&message.id==='ended-action'));
     await waitFor(()=>messages.some(message=>message.type==='output'&&message.data.includes('did not report')));
     assert(!messages.some(message=>message.type==='output'&&message.data.includes('code=undefined')));
   } finally {

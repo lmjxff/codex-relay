@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Acknowledge terminal shortcuts, suppress duplicate action IDs, block repeated clicks while waiting, and display connection/failure/uncertain-delivery states without automatic key retries.
+- 中文：快捷按钮新增回执、防连点及断线/失败/超时提示，避免静默失败或自动重复发送按键。
 - Add mobile Up/Down/Tab shortcuts and label y/n buttons by the keys they send. Numbered menus can be navigated with arrows and confirmed separately with Enter.
 
 中文：新增手机方向键和 Tab，明确 y/n 按钮的实际含义；编号菜单先选择，再回车确认。

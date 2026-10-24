@@ -150,6 +150,7 @@ let terminalScreen = new TerminalScreen(terminalDimensions.cols, terminalDimensi
 const clients = new Set<WebSocket>();
 const clientSizes = new Map<WebSocket, { cols: number; rows: number }>();
 const acceptedInputs = new Map<string, number>();
+const acceptedActions = new Map<string, { action: WsClientMessage['action']; at: number }>();
 
 function screenError(): void {
   console.error('[Terminal] Unable to update the shared screen. Check the host and restart the session.');
@@ -232,6 +233,7 @@ function spawnCodexPty(cols = 80, rows = 24): pty.IPty {
   terminalStarted = true;
   lastTerminalExit = null;
   acceptedInputs.clear();
+  acceptedActions.clear();
   const previousScreen = terminalScreen;
   const screen = new TerminalScreen(terminalDimensions.cols, terminalDimensions.rows);
   terminalScreen = screen;
@@ -605,8 +607,10 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
 
   ws.on('message', (raw: Buffer | string) => {
     let messageId: string | undefined;
+    let messageType: WsClientMessage['type'] | undefined;
     try {
       const msg = JSON.parse(raw.toString()) as WsClientMessage;
+      messageType = msg.type;
       messageId = typeof msg.id === 'string' && msg.id.length <= 128 ? msg.id : undefined;
       switch (msg.type) {
         case 'input':
@@ -637,7 +641,22 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
           }
           break;
         case 'action':
+          if (messageId) {
+            const now = Date.now();
+            for (const [id, record] of acceptedActions) if (record.at < now - 5 * 60 * 1000) acceptedActions.delete(id);
+            const previous = acceptedActions.get(messageId);
+            if (previous) {
+              if (previous.action !== msg.action) throw new Error('Action ID reused for a different key');
+              ws.send(JSON.stringify({ type: 'action-ack', id: messageId, action: msg.action }));
+              break;
+            }
+          }
           sendTerminalAction(msg.action);
+          if (messageId) {
+            acceptedActions.set(messageId, { action: msg.action, at: Date.now() });
+            if (acceptedActions.size > 1000) acceptedActions.delete(acceptedActions.keys().next().value!);
+            ws.send(JSON.stringify({ type: 'action-ack', id: messageId, action: msg.action }));
+          }
           break;
         case 'restart':
           spawnCodexPty(msg.cols || 80, msg.rows || 24);
@@ -648,7 +667,7 @@ wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
       }
     } catch {
       if (messageId && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'input-error', id: messageId, error: 'Input was not accepted by the terminal.' }));
+        ws.send(JSON.stringify({ type: messageType === 'action' ? 'action-error' : 'input-error', id: messageId, error: 'Input was not accepted by the terminal.' }));
       }
     }
   });

@@ -18,6 +18,7 @@ Captured from the actual Relay web UI with an isolated sample CLI and Git worksp
 
 - Authenticated terminal streaming using node-pty, WebSocket, and xterm.js.
 - Prompt drafts stay until the server acknowledges writing them to the terminal. Uncertain retries reuse an input ID to reduce duplicate delivery.
+- Shortcut buttons wait for a server acknowledgement and block rapid repeated clicks. Disconnection, failure and uncertain delivery are shown explicitly; shortcuts are never retried automatically.
 - Git previews include staged/unstaged changes and untracked files inside new directories, including Unicode filenames.
 - A local pairing page shows QR codes only for enabled LAN access or a registered public tunnel.
 - Browser scripts/styles are served locally, without a third-party CDN.
@@ -200,12 +201,14 @@ Scripts should prefer `Authorization: Bearer <relay-credential>` or `x-relay-tok
 | `GET /api/qr` | Authenticated pairing payload, including the credential. Unavailable public/LAN URLs are `null`. |
 | `GET /api/git/status` | Authenticated branch and per-file status. |
 | `GET /api/git/diff?file=<encoded-path>` | Authenticated raw/HTML preview, `hasChanges`, `omittedFiles`; optional file filter. |
-| `POST /api/action` | Authenticated `action`: `approve`, `reject`, `enter`, `esc`, `ctrl_c`, `start_codex`. |
+| `POST /api/action` | Authenticated `action`: `approve`, `reject`, `enter`, `esc`, `ctrl_c`, `start_codex`, `up`, `down`, `tab`. |
 | `/ws` | Authenticated stream; browser query token or script auth header. Foreign browser origins are rejected. |
 
 WebSocket outputs include `status`, `history`, `output`, and `session-reset`. History/reset messages carry the shared `cols`/`rows`; clients must apply them in order with terminal writes. Ended status includes `kind` (`normal`, `error`, `unknown`) and nullable `exitCode`/`signal`. Send `{ "type": "input", "id": "<unique-id>", "data": "..." }` for `input-ack`/`input-error` with that ID. Input limit: 16 Ki characters; frame limit: 128 KiB. Direct keystrokes without IDs remain supported. Other messages: `resize`, `action`, `restart`, `ping`.
 
 ## Troubleshooting
+
+Shortcut messages may include an ID: `{ "type": "action", "id": "<unique-id>", "action": "enter" }`. The server replies with `action-ack` or `action-error`. An acknowledgement means the key was written to the PTY, not that the running program finished or approved a request. Duplicate IDs for the same key are suppressed for up to five minutes in a bounded in-memory cache; restarting clears it. Lost acknowledgements are reported as uncertain delivery; inspect the terminal before pressing again. Refresh every browser after upgrading both server and client.
 
 | Symptom | Check |
 | --- | --- |
