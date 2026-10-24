@@ -142,6 +142,10 @@ Relay requires the configured hostname and does not create dashboard routes in t
 
 ## Daily use and limits
 
+The language selector is available before and after sign-in. Chinese/English interface text and terminal font sizes (12/13/15/17 px) are saved in this browser. Switching them preserves the current connection and draft; it does not restart the terminal or translate program output. Expand the workspace name to view its full path.
+
+**Restart** opens a confirmation dialog because it interrupts the shared session for every browser. **Cancel** leaves the session running. After upgrading, restart the Relay server when active work is finished, then refresh every connected browser so the new shortcut protocol is loaded on both sides.
+
 1. **Send** keeps text during disconnection or until acknowledgement. An acknowledgement means the PTY accepted a write, not that Codex finished. Inspect the terminal before retrying uncertain delivery. Deduplication lasts up to five minutes with a bounded in-memory cache; it does not guarantee exactly-once delivery across server restarts.
 2. **Git Diff** includes new directories and per-file filtering. Untracked files over 256 KiB are listed as omitted; binary files have no text preview. Overall Git output above 10 MiB can return an error. Use local Git for a complete review.
 3. **Restart** terminates the shared terminal and starts another. All browsers control the same session.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add browser-local Chinese/English and terminal font preferences, expandable workspace paths, a quieter mobile control layout and an explicit shared-session restart confirmation.
+- 中文：新增中英文切换、终端字号记忆、工作目录展开和重启确认，整理手机操作区布局。
 - Correct first-sign-in guidance to use the local pairing page or the launch directory's `.env`, and add bilingual credential/connectivity troubleshooting.
 - 中文：修正首次登录引导，补充凭据查找、二维码缺失及连接排错说明。
 - Acknowledge terminal shortcuts, suppress duplicate action IDs, block repeated clicks while waiting, and display connection/failure/uncertain-delivery states without automatic key retries.

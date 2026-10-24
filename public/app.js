@@ -25,6 +25,22 @@
   const connectionStatus = document.getElementById('connection-status');
   const actionStatus = document.getElementById('action-status');
   const actionButtons = [...document.querySelectorAll('[data-action]')];
+  const languageSelects = [...document.querySelectorAll('[data-language-select]')];
+  const fontSizeSelect = document.getElementById('font-size');
+  const workspacePath = document.getElementById('workspace-path');
+  const restartDialog = document.getElementById('restart-dialog');
+  const restartConfirm = document.getElementById('restart-confirm');
+  const localizedMessages = new Map();
+  const languageKey = 'codex_relay_language';
+  const fontSizeKey = 'codex_relay_font_size';
+  function readPreference(key) { try { return localStorage.getItem(key); } catch { return null; } }
+  function savePreference(key, value) { try { localStorage.setItem(key, value); } catch {} }
+  const savedLanguage = readPreference(languageKey);
+  let language = ['zh-CN', 'en'].includes(savedLanguage) ? savedLanguage
+    : (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
+  const savedFontSize = Number(readPreference(fontSizeKey));
+  const fontSize = [12, 13, 15, 17].includes(savedFontSize) ? savedFontSize : 13;
+  const t = (key, params) => window.RelayI18n.translate(language, key, params);
   if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(window.location.hostname)) btnQr.hidden = true;
 
   let activeTab = 'terminal';
@@ -39,12 +55,47 @@
   let terminalRunning = null;
   let pendingAction = null;
   let actionTimer = null;
+  let restartPending = false;
+  let restartTimer = null;
   let lastViewportSize = '';
   const renderQueue = [];
   let rendering = false;
 
+  function setMessage(element, key, params = {}) {
+    if (key) localizedMessages.set(element, { key, params });
+    else localizedMessages.delete(element);
+    element.textContent = key ? t(key, params) : '';
+  }
+
+  function applyLanguage() {
+    document.documentElement.lang = language;
+    for (const element of document.querySelectorAll('[data-i18n]')) element.textContent = t(element.getAttribute('data-i18n'));
+    for (const attribute of ['placeholder', 'title', 'aria-label']) {
+      for (const element of document.querySelectorAll(`[data-i18n-${attribute}]`)) {
+        element.setAttribute(attribute, t(element.getAttribute(`data-i18n-${attribute}`)));
+      }
+    }
+    for (const [element, message] of localizedMessages) element.textContent = t(message.key, message.params);
+    for (const select of languageSelects) select.value = language;
+    wsDot.title = t(ws?.readyState === WebSocket.OPEN ? 'connected' : 'disconnected');
+  }
+
+  function setWorkspace(cwd) {
+    const parts = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
+    cwdLabel.textContent = parts.at(-1) || cwd;
+    workspacePath.textContent = cwd;
+  }
+
+  function showDiffState(key) {
+    diffContainer.innerHTML = '';
+    const message = document.createElement('div');
+    message.className = 'empty-state';
+    message.textContent = t(key);
+    diffContainer.appendChild(message);
+  }
+
   function setPromptStatus(message, sending = false) {
-    promptStatus.textContent = message;
+    setMessage(promptStatus, message);
     btnSend.disabled = sending;
   }
 
@@ -58,24 +109,33 @@
   function updateActionButtons() {
     const connected = isAuthenticated && ws?.readyState === WebSocket.OPEN;
     for (const button of actionButtons) {
-      button.disabled = !connected || Boolean(pendingAction) ||
+      button.disabled = !connected || Boolean(pendingAction) || restartPending ||
         (terminalRunning === false && button.getAttribute('data-action') !== 'start_codex');
     }
-    btnRestart.disabled = !connected || Boolean(pendingAction);
+    btnRestart.disabled = !connected || Boolean(pendingAction) || restartPending;
+    restartConfirm.disabled = btnRestart.disabled;
   }
 
   function finishAction(message) {
     if (actionTimer) clearTimeout(actionTimer);
     actionTimer = null;
     pendingAction = null;
-    actionStatus.textContent = message;
+    setMessage(actionStatus, message);
+    updateActionButtons();
+  }
+
+  function finishRestart(key) {
+    if (restartTimer) clearTimeout(restartTimer);
+    restartTimer = null;
+    restartPending = false;
+    setMessage(actionStatus, key);
     updateActionButtons();
   }
 
   // Initialize xterm.js terminal
   const term = new window.Terminal({
     cursorBlink: true,
-    fontSize: 13,
+    fontSize,
     fontFamily:
       'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
     theme: {
@@ -91,6 +151,23 @@
   const fitAddon = new window.FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(terminalContainer);
+  fontSizeSelect.value = String(fontSize);
+  applyLanguage();
+  for (const select of languageSelects) select.addEventListener('change', () => {
+    if (!['zh-CN', 'en'].includes(select.value)) return;
+    language = select.value;
+    savePreference(languageKey, language);
+    applyLanguage();
+    fitTerminal();
+    if (isAuthenticated) refreshGitStatusAndDiff();
+  });
+  fontSizeSelect.addEventListener('change', () => {
+    const next = Number(fontSizeSelect.value);
+    if (![12, 13, 15, 17].includes(next)) return;
+    term.options.fontSize = next;
+    savePreference(fontSizeKey, String(next));
+    fitTerminal();
+  });
 
   function renderTerminal(operation) {
     renderQueue.push(operation);
@@ -164,7 +241,7 @@
   function showLockScreen(errorMsg = '') {
     isAuthenticated = false;
     authOverlay.classList.remove('hidden');
-    authError.textContent = errorMsg;
+    setMessage(authError, errorMsg);
     if (reconnectTimer) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -182,7 +259,9 @@
     }
     preservePendingPrompt('');
     finishAction('');
-    connectionStatus.textContent = '未连接';
+    if (restartDialog.open) restartDialog.close();
+    if (restartPending) finishRestart('');
+    setMessage(connectionStatus, 'disconnected');
     wsDot.classList.remove('connected');
     setTimeout(() => authTokenInput.focus(), 80);
   }
@@ -190,7 +269,7 @@
   async function verifyAndUnlock(candidateToken) {
     const cleaned = (candidateToken || '').trim();
     if (!cleaned) {
-      showLockScreen('请输入访问密码 / PIN 码');
+      showLockScreen('credentialRequired');
       return false;
     }
 
@@ -204,19 +283,18 @@
 
       if (!res.ok || !data.ok) {
         localStorage.removeItem(STORAGE_KEY);
-        showLockScreen(data.error || '访问密码校验失败');
+        showLockScreen(res.status === 429 ? 'loginLimited' : 'loginInvalid');
         return false;
       }
 
       authToken = cleaned;
       isAuthenticated = true;
       localStorage.setItem(STORAGE_KEY, authToken);
-      authError.textContent = '';
+      setMessage(authError, '');
       authOverlay.classList.add('hidden');
 
       if (data.cwd) {
-        cwdLabel.textContent = data.cwd;
-        cwdLabel.title = data.cwd;
+        setWorkspace(data.cwd);
       }
 
       connectWebSocket();
@@ -226,7 +304,7 @@
       pollTimer = setInterval(refreshGitStatusAndDiff, 4000);
       return true;
     } catch {
-      showLockScreen('网络请求失败，无法验证访问密码');
+      showLockScreen('loginNetwork');
       return false;
     }
   }
@@ -244,7 +322,7 @@
     authTokenInput.value = '';
     renderQueue.length = 0;
     renderTerminal({ type: 'session-reset' });
-    showLockScreen('已安全锁定终端');
+    showLockScreen('locked');
   });
 
   function authFetch(url, options = {}) {
@@ -254,7 +332,7 @@
     return fetch(url, Object.assign({}, options, { headers })).then((res) => {
       if (res.status === 401) {
         localStorage.removeItem(STORAGE_KEY);
-        showLockScreen('会话已过期或密码已更改，请重新输入');
+        showLockScreen('loginExpired');
       }
       return res;
     });
@@ -276,15 +354,15 @@
     }
     const connection = new WebSocket(wsUrl);
     ws = connection;
-    connectionStatus.textContent = '连接中…';
+    setMessage(connectionStatus, 'connecting');
     updateActionButtons();
     lastViewportSize = '';
 
     connection.addEventListener('open', () => {
       if (ws !== connection) return;
       wsDot.classList.add('connected');
-      wsDot.title = 'WebSocket Connected (Authenticated)';
-      connectionStatus.textContent = '已连接';
+      wsDot.title = t('connected');
+      setMessage(connectionStatus, 'connected');
       updateActionButtons();
       setTimeout(fitTerminal, 80);
     });
@@ -299,33 +377,31 @@
           renderTerminal(msg);
         } else if (msg.type === 'session-reset') {
           renderTerminal(msg);
-          if (pendingAction && pendingAction.action !== 'start_codex') finishAction('终端已重启，请检查终端后再操作');
+          if (restartPending) finishRestart('restarted');
+          if (pendingAction && pendingAction.action !== 'start_codex') finishAction('actionReset');
           if (pendingPrompt) {
             pendingPrompt = null;
-            preservePendingPrompt('终端已重启，输入已保留；请检查后重新发送');
+            preservePendingPrompt('draftRestarted');
           }
         } else if (msg.type === 'input-ack' && pendingPrompt && msg.id === pendingPrompt.id) {
           if (promptInput.value === pendingPrompt.text) promptInput.value = '';
           pendingPrompt = null;
-          preservePendingPrompt('已发送到终端');
+          preservePendingPrompt('promptAccepted');
         } else if (msg.type === 'input-error' && pendingPrompt && msg.id === pendingPrompt.id) {
-          preservePendingPrompt('发送未成功，输入已保留，请检查终端后重试');
+          preservePendingPrompt('promptFailed');
         } else if (msg.type === 'action-ack' && pendingAction && msg.id === pendingAction.id) {
-          finishAction('快捷键已写入终端；请查看程序响应');
+          finishAction('actionAccepted');
         } else if (msg.type === 'action-error' && pendingAction && msg.id === pendingAction.id) {
-          finishAction('操作失败，请检查终端状态后再试');
+          finishAction('actionFailed');
         } else if (msg.type === 'status') {
           if (typeof msg.running === 'boolean') {
             terminalRunning = msg.running;
             terminalState.hidden = msg.running;
-            terminalState.textContent = msg.running ? '' : msg.kind === 'normal'
-              ? '终端会话已正常结束。点击 Restart 新建会话。'
-              : msg.kind === 'error' ? '终端会话已结束，请检查上方输出，再点击 Restart。'
-              : '终端连接已关闭，系统未提供退出状态。点击 Restart 重新连接。';
+            setMessage(terminalState, msg.running ? '' : msg.kind === 'normal'
+              ? 'terminalNormal' : msg.kind === 'error' ? 'terminalError' : 'terminalUnknown');
           }
           if (msg.cwd) {
-            cwdLabel.textContent = msg.cwd;
-            cwdLabel.title = msg.cwd;
+            setWorkspace(msg.cwd);
           }
           updateActionButtons();
         }
@@ -337,12 +413,14 @@
     connection.addEventListener('close', () => {
       if (ws !== connection) return;
       ws = null;
-      if (pendingAction) finishAction('连接已断开，操作是否送达未知；请查看终端后再操作');
+      if (restartDialog.open) restartDialog.close();
+      if (restartPending) finishRestart('restartUncertain');
+      if (pendingAction) finishAction('actionDisconnected');
       updateActionButtons();
-      connectionStatus.textContent = '连接断开，正在重连…';
-      if (pendingPrompt) preservePendingPrompt('连接已断开，输入已保留；重连后可重试');
+      setMessage(connectionStatus, 'reconnecting');
+      if (pendingPrompt) preservePendingPrompt('draftDisconnected');
       wsDot.classList.remove('connected');
-      wsDot.title = 'Disconnected — Reconnecting...';
+      wsDot.title = t('reconnecting');
       if (isAuthenticated) {
         reconnectTimer = setTimeout(connectWebSocket, 2000);
       }
@@ -355,25 +433,25 @@
 
   function sendAction(action) {
     if (!isAuthenticated) return;
-    if (pendingAction) return;
+    if (pendingAction || restartPending) return;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      actionStatus.textContent = '尚未连接，未发送快捷键';
+      setMessage(actionStatus, 'actionOffline');
       return;
     }
     if (terminalRunning === false && action !== 'start_codex') {
-      actionStatus.textContent = '终端已关闭，请先启动或重启会话';
+      setMessage(actionStatus, 'actionEnded');
       return;
     }
     hapticFeedback(action === 'approve' || action === 'reject' ? [30, 40, 30] : 20);
     const id = `action-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     pendingAction = { id, action };
-    actionStatus.textContent = '正在发送快捷键…';
+    setMessage(actionStatus, 'actionSending');
     updateActionButtons();
     try {
       ws.send(JSON.stringify({ type: 'action', action, id }));
-      actionTimer = setTimeout(() => finishAction('尚未收到回执，操作是否送达未知；请查看终端后再操作'), 7000);
+      actionTimer = setTimeout(() => finishAction('actionUncertain'), 7000);
     } catch {
-      finishAction('连接不可用，操作是否送达未知；请查看终端');
+      finishAction('actionUnavailable');
     }
   }
 
@@ -392,27 +470,27 @@
     const text = promptInput.value;
     if (!text.trim()) return;
     if (terminalRunning === false) {
-      setPromptStatus('终端已关闭，输入已保留，请先点击 Restart');
+      setPromptStatus('promptEnded');
       return;
     }
     if (pendingPrompt?.waiting) return;
     hapticFeedback(20);
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setPromptStatus('尚未连接，输入已保留，请等待重连');
+      setPromptStatus('promptOffline');
       return;
     }
     if (text.length >= 16 * 1024) {
-      setPromptStatus('输入过长，请拆分为少于 16K 字符的消息');
+      setPromptStatus('promptTooLong');
       return;
     }
     const id = pendingPrompt?.text === text ? pendingPrompt.id : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     pendingPrompt = { id, text, waiting: true };
-    setPromptStatus('发送中…', true);
+    setPromptStatus('promptSending', true);
     try {
       ws.send(JSON.stringify({ type: 'input', id, data: `${text}\r` }));
-      pendingTimer = setTimeout(() => preservePendingPrompt('尚未收到确认，输入已保留；查看终端后可重试'), 7000);
+      pendingTimer = setTimeout(() => preservePendingPrompt('promptUncertain'), 7000);
     } catch {
-      preservePendingPrompt('连接不可用，输入已保留');
+      preservePendingPrompt('promptUnavailable');
     }
     if (activeTab !== 'terminal') {
       switchTab('terminal');
@@ -421,9 +499,19 @@
 
   // Restart PTY session
   btnRestart.addEventListener('click', () => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || !ws || ws.readyState !== WebSocket.OPEN || pendingAction || restartPending) return;
     hapticFeedback(35);
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (!restartDialog.open) restartDialog.showModal();
+  });
+  document.getElementById('restart-cancel').addEventListener('click', () => restartDialog.close());
+  restartConfirm.addEventListener('click', () => {
+    if (!restartDialog.open) return;
+    restartDialog.close();
+    if (!isAuthenticated || !ws || ws.readyState !== WebSocket.OPEN || pendingAction || restartPending) return;
+    restartPending = true;
+    setMessage(actionStatus, 'restarting');
+    updateActionButtons();
+    try {
       ws.send(
         JSON.stringify({
           type: 'restart',
@@ -431,6 +519,9 @@
           rows: term.rows || 24,
         })
       );
+      restartTimer = setTimeout(() => finishRestart('restartUncertain'), 7000);
+    } catch {
+      finishRestart('restartUncertain');
     }
   });
 
@@ -471,8 +562,7 @@
       if (statusData.ok) {
         gitBranch.textContent = statusData.branch || 'HEAD';
         if (statusData.cwd) {
-          cwdLabel.textContent = statusData.cwd;
-          cwdLabel.title = statusData.cwd;
+          setWorkspace(statusData.cwd);
         }
 
         const files = Array.isArray(statusData.files) ? statusData.files : [];
@@ -487,8 +577,7 @@
       }
     } catch {
       if (activeTab === 'diff') {
-        diffContainer.innerHTML =
-          '<div class="empty-state">Unable to load Git status/diff from server.</div>';
+        showDiffState('gitUnavailable');
       }
     }
   }
@@ -499,7 +588,7 @@
 
     const allChip = document.createElement('button');
     allChip.className = `file-chip ${selectedFile === '' ? 'active' : ''}`;
-    allChip.textContent = `All (${files.length})`;
+    allChip.textContent = t('allFiles', { count: files.length });
     allChip.addEventListener('click', () => {
       selectedFile = '';
       renderFileChips(files);
@@ -529,18 +618,17 @@
       const data = await res.json();
 
       if (!data.ok) {
-        diffContainer.textContent = data.error || 'Error loading diff';
+        showDiffState('diffError');
         return;
       }
 
       if (!data.hasChanges) {
-        diffContainer.innerHTML =
-          '<div class="empty-state">✨ Working tree clean — no uncommitted changes to preview.</div>';
+        showDiffState('treeClean');
         return;
       }
 
       if (!data.html) {
-        diffContainer.textContent = 'Changes exist, but no text preview is available. Check the file list and local Git diff.';
+        showDiffState('noTextPreview');
         return;
       }
 
@@ -548,12 +636,11 @@
       if (data.omittedFiles?.length) {
         const notice = document.createElement('p');
         notice.className = 'preview-notice';
-        notice.textContent = `Preview omitted: ${data.omittedFiles.map(item => `${item.file} (${item.reason})`).join(', ')}`;
+        notice.textContent = t('omitted', { files: data.omittedFiles.map(item => `${item.file} (${item.reason})`).join(', ') });
         diffContainer.prepend(notice);
       }
     } catch {
-      diffContainer.innerHTML =
-        '<div class="empty-state">Failed to fetch diff preview.</div>';
+      showDiffState('diffUnavailable');
     }
   }
 

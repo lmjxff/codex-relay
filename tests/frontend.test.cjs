@@ -5,16 +5,21 @@ const path=require('node:path');
 const vm=require('node:vm');
 const {project}=require('./helpers.cjs');
 
-async function browser({delayedWrites=false}={}){
+async function browser({delayedWrites=false,preferences={},browserLanguage='zh-CN'}={}){
   const elements=new Map(),sockets=[],timers=[],writes=[],actions=new Map();
   function element(){return {value:'',textContent:'',innerHTML:'',hidden:false,disabled:false,
     classList:{add(){},remove(){},toggle(){}},listeners:{},addEventListener(type,fn){this.listeners[type]=fn;},
-    appendChild(){},prepend(){},setAttribute(){},getAttribute(name){return this[name];},focus(){}};}
+    open:false,showModal(){this.open=true;},close(){this.open=false;},
+    appendChild(){},prepend(){},setAttribute(name,value){this[name]=value;},getAttribute(name){return this[name];},focus(){}};}
   for(const match of fs.readFileSync(path.join(project,'public','index.html'),'utf8').matchAll(/data-action="([^"]+)"/g)) {
     const button=element();button['data-action']=match[1];actions.set(match[1],button);
   }
-  const document={getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},
-    querySelectorAll(selector){return selector==='[data-action]'?[...actions.values()]:[];},createElement:element,title:'Relay'};
+  const document={documentElement:{lang:''},getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},
+    querySelectorAll(selector){
+      if(selector==='[data-action]')return [...actions.values()];
+      if(selector==='[data-language-select]')return ['auth-language','ui-language'].map(id=>this.getElementById(id));
+      return [];
+    },createElement:element,title:'Relay'};
   const terminal={cols:80,rows:24,output:'',resets:0,loadAddon(){},open(){},onData(){},clear(){},
     reset(){this.output='';this.resets++;},resize(cols,rows){this.cols=cols;this.rows=rows;},
     write(data,callback){const complete=()=>{this.output+=data;callback?.();};delayedWrites?writes.push(complete):complete();}};
@@ -28,18 +33,67 @@ async function browser({delayedWrites=false}={}){
     open(){this.readyState=1;this.dispatch('open');}
     message(message){this.dispatch('message',{data:JSON.stringify(message)});}
   }
-  const storage=new Map([['codex_relay_auth_token','synthetic-browser-test-credential']]);
-  const context={document,URLSearchParams,WebSocket:Socket,navigator:{},
+  const storage=new Map([['codex_relay_auth_token','synthetic-browser-test-credential'],...Object.entries(preferences)]);
+  const context={document,URLSearchParams,WebSocket:Socket,navigator:{language:browserLanguage},
     localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},
     setTimeout(fn,delay){const timer={fn,delay};timers.push(timer);return timer;},clearTimeout(timer){if(timer)timer.cancelled=true;},
     setInterval(){return 1;},clearInterval(){},
     fetch:async url=>({ok:true,status:200,json:async()=>url.includes('auth')?{ok:true,cwd:'/synthetic'}:{ok:true,files:[]}}),
     window:{location:{hostname:'localhost',host:'localhost:3210',protocol:'http:',search:'',pathname:'/',hash:''},
-      history:{replaceState(){}},addEventListener(){},Terminal:function(){return terminal;},FitAddon:{FitAddon:function(){this.proposeDimensions=()=>({cols:120,rows:35});}}}};
-  vm.runInNewContext(fs.readFileSync(path.join(project,'public','app.js'),'utf8'),context);
+      history:{replaceState(){}},addEventListener(){},Terminal:function(options){terminal.options=options;return terminal;},FitAddon:{FitAddon:function(){this.proposeDimensions=()=>({cols:120,rows:35});}}}};
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(project,'public','i18n.js'),'utf8'),context);
+  vm.runInContext(fs.readFileSync(path.join(project,'public','app.js'),'utf8'),context);
   await new Promise(resolve=>setImmediate(resolve));
-  return {elements,sockets,timers,terminal,writes,actions,submit(){elements.get('prompt-form').listeners.submit({preventDefault(){}});}};
+  return {elements,sockets,timers,terminal,writes,actions,storage,document,i18n:context.window.RelayI18n,submit(){elements.get('prompt-form').listeners.submit({preventDefault(){}});}};
 }
+
+test('language and font preferences restore and change without replacing the terminal or draft',async()=>{
+  const page=await browser({preferences:{codex_relay_language:'en',codex_relay_font_size:'17'}}),socket=page.sockets[0];socket.open();
+  assert.equal(page.document.documentElement.lang,'en');assert.equal(page.terminal.options.fontSize,17);
+  assert.equal(page.elements.get('connection-status').textContent,'Connected');
+  const input=page.elements.get('prompt-input');input.value='unsent draft';
+  const language=page.elements.get('ui-language');language.value='zh-CN';language.listeners.change();
+  assert.equal(page.storage.get('codex_relay_language'),'zh-CN');
+  assert.equal(page.elements.get('auth-language').value,'zh-CN');
+  assert.equal(page.elements.get('connection-status').textContent,'已连接');
+  const font=page.elements.get('font-size');font.value='15';font.listeners.change();
+  assert.equal(page.terminal.options.fontSize,15);assert.equal(page.storage.get('codex_relay_font_size'),'15');
+  assert.equal(input.value,'unsent draft');assert.equal(page.sockets.length,1);assert.equal(page.terminal.resets,0);
+  assert(socket.sent.every(message=>message.type==='resize'));
+});
+
+test('unsupported preferences fall back and both languages cover visible interface keys',async()=>{
+  const page=await browser({preferences:{codex_relay_language:'xx',codex_relay_font_size:'999'},browserLanguage:'en-US'});
+  assert.equal(page.document.documentElement.lang,'en');assert.equal(page.terminal.options.fontSize,13);
+  const dictionaries=page.i18n.messages;
+  assert.deepEqual(Object.keys(dictionaries.en).sort(),Object.keys(dictionaries['zh-CN']).sort());
+  for(const match of fs.readFileSync(path.join(project,'public','index.html'),'utf8').matchAll(/data-i18n(?:-placeholder|-title|-aria-label)?="([^"]+)"/g)) {
+    assert(dictionaries.en[match[1]],`Missing English: ${match[1]}`);
+    assert(dictionaries['zh-CN'][match[1]],`Missing Chinese: ${match[1]}`);
+  }
+});
+
+test('workspace labels use the folder name while preserving the full path as text',async()=>{
+  const page=await browser(),socket=page.sockets[0];socket.open();
+  socket.message({type:'status',running:true,cwd:'C:\\work\\my-project'});
+  assert.equal(page.elements.get('cwd-label').textContent,'my-project');
+  assert.equal(page.elements.get('workspace-path').textContent,'C:\\work\\my-project');
+});
+
+test('restart requires confirmation and cancellation never sends a restart',async()=>{
+  const page=await browser(),socket=page.sockets[0];socket.open();
+  const button=page.elements.get('btn-restart'),dialog=page.elements.get('restart-dialog');
+  button.listeners.click();assert(dialog.open);assert.equal(socket.sent.length,0);
+  page.elements.get('restart-cancel').listeners.click();assert(!dialog.open);assert.equal(socket.sent.length,0);
+  button.listeners.click();page.elements.get('restart-confirm').listeners.click();
+  assert.equal(socket.sent.length,1);assert.equal(socket.sent[0].type,'restart');assert(button.disabled);
+  button.listeners.click();assert(!dialog.open);
+  socket.message({type:'session-reset',cols:80,rows:24});assert(!button.disabled);
+  assert(page.elements.get('action-status').textContent.includes('重新创建'));
+  button.listeners.click();socket.close();assert(!dialog.open);
+  page.elements.get('restart-confirm').listeners.click();assert.equal(socket.sent.filter(message=>message.type==='restart').length,1);
+});
 
 test('mobile menu buttons send separate navigation and confirmation actions',async()=>{
   const page=await browser(),socket=page.sockets[0];socket.open();

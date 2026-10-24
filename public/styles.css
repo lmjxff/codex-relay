@@ -134,6 +134,7 @@ body {
 }
 
 .app-shell {
+  min-height: 560px;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -160,6 +161,14 @@ body {
   align-items: center;
   gap: 8px;
 }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.display-settings { position: relative; display: flex; align-items: center; gap: 8px; padding: 4px 12px; background: var(--bg-secondary); }
+.display-settings select, .language-control select { min-height: 36px; max-width: 140px; color: var(--text-primary); background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 6px; padding: 4px 6px; font-size: 0.78rem; }
+.language-control { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.workspace-details { min-width: 0; margin-left: auto; }
+.workspace-details summary { cursor: pointer; }
+.workspace-path { position: absolute; top: 100%; left: 8px; right: 8px; z-index: 5; padding: 12px; color: var(--text-primary); background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.8rem; overflow-wrap: anywhere; }
 
 .status-dot {
   width: 10px;
@@ -446,6 +455,7 @@ body {
 }
 
 .prompt-input {
+  min-width: 0;
   flex: 1;
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -513,8 +523,8 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 82px;
-  padding: 12px 10px;
+  min-height: 64px;
+  padding: 8px;
   border-radius: 14px;
   color: #ffffff;
   cursor: pointer;
@@ -528,15 +538,13 @@ body {
 }
 
 .approve-btn {
-  background: linear-gradient(180deg, var(--approve-hover), var(--approve-bg));
-  border: 2px solid var(--approve-border);
-  box-shadow: 0 4px 16px rgba(35, 134, 54, 0.35);
+  background: rgba(35, 134, 54, 0.22);
+  border: 1px solid var(--approve-border);
 }
 
 .reject-btn {
-  background: linear-gradient(180deg, var(--reject-hover), var(--reject-bg));
-  border: 2px solid var(--reject-border);
-  box-shadow: 0 4px 16px rgba(218, 54, 51, 0.35);
+  background: rgba(218, 54, 51, 0.18);
+  border: 1px solid var(--reject-border);
 }
 
 .thumb-icon {
@@ -547,7 +555,7 @@ body {
 }
 
 .thumb-title {
-  font-size: 1.05rem;
+  font-size: 0.92rem;
   font-weight: 800;
   letter-spacing: 0.3px;
 }
@@ -566,3 +574,11 @@ body {
 .connection-status { padding: 4px 12px; color: var(--text-muted); font-size: 0.75rem; background: var(--bg-secondary); }
 .action-status { color: var(--accent-blue); font-size: 0.8rem; min-height: 1.2em; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+.prompt-status:empty, .action-status:empty { display: none; }
+.restart-dialog { margin: auto; width: min(90vw, 420px); padding: 24px; color: var(--text-primary); background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 14px; }
+.restart-dialog::backdrop { background: rgba(0, 0, 0, 0.7); }
+.restart-dialog h2 { font-size: 1.1rem; }
+.restart-dialog p { margin: 12px 0 20px; color: var(--text-muted); font-size: 0.9rem; line-height: 1.5; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dialog-actions button { padding: 10px 16px; }
+@media (max-height: 560px) { body { overflow-y: auto; } }

@@ -25,17 +25,23 @@
     <!-- Security Lock Screen Overlay (PIN / Token Gate) -->
     <div class="auth-overlay" id="auth-overlay">
       <div class="auth-card">
+        <label class="language-control">
+          <span class="sr-only" data-i18n="language">界面语言</span>
+          <select id="auth-language" data-language-select aria-label="界面语言" data-i18n-aria-label="language">
+            <option value="zh-CN">简体中文</option><option value="en">English</option>
+          </select>
+        </label>
         <div class="auth-lock-icon">🔒</div>
-        <h1 class="auth-title">Codex Relay 安全锁</h1>
-        <p class="auth-desc">
+        <h1 class="auth-title" data-i18n="authTitle">Codex Relay 安全锁</h1>
+        <p class="auth-desc" data-i18n="authDescription">
           在运行 Relay 的电脑上打开本地 /qr 配对页扫码，或从 Relay 启动目录的 .env 中读取 RELAY_AUTH_TOKEN 后输入。凭据不会显示在终端日志中。
         </p>
         <details class="auth-help">
-          <summary>第一次使用或无法连接？</summary>
+          <summary data-i18n="authHelp">第一次使用或无法连接？</summary>
           <ol>
-            <li>先在电脑启动 Relay，再打开 http://localhost:3210/qr；如果改过端口，请使用对应端口。</li>
-            <li>默认只允许电脑本机访问。手机需要启用局域网入口或公网隧道后，再使用配对页提供的入口。</li>
-            <li>不要把 .env、二维码或含凭据的链接发到 Issue、聊天或截图里。</li>
+            <li data-i18n="authStep1">先在电脑启动 Relay，再打开 http://localhost:3210/qr；如果改过端口，请使用对应端口。</li>
+            <li data-i18n="authStep2">默认只允许电脑本机访问。手机需要启用局域网入口或公网隧道后，再使用配对页提供的入口。</li>
+            <li data-i18n="authStep3">不要把 .env、二维码或含凭据的链接发到 Issue、聊天或截图里。</li>
           </ol>
         </details>
         <form id="auth-form" class="auth-form" autocomplete="off">
@@ -44,11 +50,14 @@
             id="auth-token-input"
             class="auth-input"
             placeholder="输入访问凭据"
+            data-i18n-placeholder="credentialPlaceholder"
+            aria-label="输入访问凭据"
+            data-i18n-aria-label="credentialPlaceholder"
             inputmode="text"
             required
           />
           <div class="auth-error" id="auth-error"></div>
-          <button type="submit" class="auth-submit-btn" id="auth-submit-btn">
+          <button type="submit" class="auth-submit-btn" id="auth-submit-btn" data-i18n="unlock">
             解锁进入终端 →
           </button>
         </form>
@@ -64,7 +73,6 @@
           <span class="branch-badge" id="git-branch">main</span>
         </div>
         <div class="topbar-actions">
-          <span class="cwd-label" id="cwd-label" title="Workspace Directory">...</span>
           <a
             href="/qr"
             id="btn-qr"
@@ -72,17 +80,38 @@
             class="icon-btn"
             style="text-decoration: none"
             title="打开高清手机扫码页面"
+            data-i18n="pair"
+            data-i18n-title="pairTitle"
           >
             📱 扫码
           </a>
-          <button class="icon-btn" id="btn-restart" title="Restart PTY Session">
+          <button class="icon-btn" id="btn-restart" title="Restart PTY Session" data-i18n="restart" data-i18n-title="restartTitle">
             ↻ Restart
           </button>
-          <button class="icon-btn" id="btn-lock" title="Lock & Logout">
+          <button class="icon-btn" id="btn-lock" title="Lock & Logout" data-i18n-title="lockTitle" data-i18n-aria-label="lockTitle">
             🔒
           </button>
         </div>
       </header>
+      <section class="display-settings" aria-label="显示设置" data-i18n-aria-label="settings">
+        <label>
+          <span class="sr-only" data-i18n="language">界面语言</span>
+          <select id="ui-language" data-language-select aria-label="界面语言" data-i18n-aria-label="language">
+            <option value="zh-CN">简体中文</option><option value="en">English</option>
+          </select>
+        </label>
+        <label>
+          <span class="sr-only" data-i18n="fontSize">终端字号</span>
+          <select id="font-size" aria-label="终端字号" data-i18n-aria-label="fontSize">
+            <option value="12">12 px</option><option value="13" selected>13 px</option>
+            <option value="15">15 px</option><option value="17">17 px</option>
+          </select>
+        </label>
+        <details class="workspace-details">
+          <summary class="cwd-label" id="cwd-label" title="展开查看完整工作目录" data-i18n-title="workspaceTitle">...</summary>
+          <p id="workspace-path" class="workspace-path"></p>
+        </details>
+      </section>
       <p id="connection-status" class="connection-status" role="status" aria-live="polite">未连接</p>
 
       <!-- View Switcher Tabs: Terminal vs Git Diff -->
@@ -94,7 +123,7 @@
           role="tab"
           aria-selected="true"
         >
-          <span>⌨️ Terminal (xterm.js)</span>
+          <span data-i18n="terminalTab">⌨️ 终端</span>
         </button>
         <button
           class="tab-btn"
@@ -103,7 +132,7 @@
           role="tab"
           aria-selected="false"
         >
-          <span>🔀 Git Diff</span>
+          <span data-i18n="diffTab">🔀 Git Diff</span>
           <span class="diff-badge" id="diff-count-badge">0</span>
         </button>
       </nav>
@@ -119,12 +148,12 @@
         <section class="tab-panel" id="panel-diff" role="tabpanel">
           <div class="diff-toolbar">
             <div class="file-chips" id="file-chips">
-              <button class="file-chip active" data-file="">All Changes</button>
+              <button class="file-chip active" data-file="" data-i18n="allChanges">全部改动</button>
             </div>
-            <button class="refresh-diff-btn" id="btn-refresh-diff">⟳ Refresh</button>
+            <button class="refresh-diff-btn" id="btn-refresh-diff" data-i18n="refresh">⟳ 刷新</button>
           </div>
           <div id="diff-container" class="diff-container">
-            <div class="empty-state">Loading Git diff...</div>
+            <div class="empty-state" data-i18n="loadingDiff">正在加载 Git 差异…</div>
           </div>
         </section>
       </main>
@@ -139,34 +168,37 @@
             id="prompt-input"
             class="prompt-input"
             placeholder="Send prompt or command to Codex CLI..."
+            data-i18n-placeholder="promptPlaceholder"
+            aria-label="发送任务或命令到终端"
+            data-i18n-aria-label="promptPlaceholder"
           />
-          <button type="submit" class="send-btn" id="btn-send">Send ↵</button>
+          <button type="submit" class="send-btn" id="btn-send" data-i18n="send">发送 ↵</button>
         </form>
         <p id="prompt-status" class="prompt-status" role="status" aria-live="polite"></p>
         <p id="action-status" class="action-status" role="status" aria-live="polite"></p>
 
         <!-- Auxiliary Terminal Keys -->
-        <div class="quick-keys navigation-keys" role="group" aria-label="Menu navigation">
-          <button type="button" class="key-btn" data-action="up" aria-label="Up arrow">↑ Up</button>
-          <button type="button" class="key-btn" data-action="down" aria-label="Down arrow">↓ Down</button>
-          <button type="button" class="key-btn" data-action="tab">Tab ⇥</button>
+        <div class="quick-keys navigation-keys" role="group" aria-label="菜单导航" data-i18n-aria-label="menuNavigation">
+          <button type="button" class="key-btn" data-action="up" data-i18n="up">↑ 上移</button>
+          <button type="button" class="key-btn" data-action="down" data-i18n="down">↓ 下移</button>
+          <button type="button" class="key-btn" data-action="tab" data-i18n="tab">Tab ⇥</button>
         </div>
         <div class="quick-keys">
-          <button type="button" class="key-btn" data-action="start_codex">
+          <button type="button" class="key-btn" data-action="start_codex" data-i18n="run">
             🚀 Run codex
           </button>
-          <button type="button" class="key-btn" data-action="enter">
+          <button type="button" class="key-btn" data-action="enter" data-i18n="enter">
             Enter ↵
           </button>
-          <button type="button" class="key-btn" data-action="esc">
+          <button type="button" class="key-btn" data-action="esc" data-i18n="esc">
             Esc
           </button>
-          <button type="button" class="key-btn danger-subtle" data-action="ctrl_c">
+          <button type="button" class="key-btn danger-subtle" data-action="ctrl_c" data-i18n="ctrlC">
             Ctrl+C
           </button>
         </div>
 
-        <p class="key-hint">Numbered menu: ↑ / ↓ to select, then Enter. Use y / n only when the prompt asks for them.</p>
+        <p class="key-hint" data-i18n="keyHint">编号菜单：↑ / ↓ 选择，再按回车。仅在提示接受 y/n 时使用下方快捷键。</p>
 
         <!-- Giant Thumb Approval Buttons -->
         <div class="thumb-approval-grid">
@@ -177,8 +209,8 @@
             data-action="approve"
           >
             <span class="thumb-icon">✓</span>
-            <span class="thumb-title">Send y + Enter</span>
-            <span class="thumb-subtitle">For y/n prompts</span>
+            <span class="thumb-title" data-i18n="sendYes">发送 y + 回车</span>
+            <span class="thumb-subtitle" data-i18n="ynHint">用于 y/n 提示</span>
           </button>
 
           <button
@@ -188,16 +220,26 @@
             data-action="reject"
           >
             <span class="thumb-icon">✕</span>
-            <span class="thumb-title">Send n + Enter</span>
-            <span class="thumb-subtitle">For y/n prompts</span>
+            <span class="thumb-title" data-i18n="sendNo">发送 n + 回车</span>
+            <span class="thumb-subtitle" data-i18n="ynHint">用于 y/n 提示</span>
           </button>
         </div>
       </section>
     </div>
 
+    <dialog id="restart-dialog" class="restart-dialog" aria-labelledby="restart-heading" aria-describedby="restart-description">
+      <h2 id="restart-heading" data-i18n="restartHeading">重启共享终端？</h2>
+      <p id="restart-description" data-i18n="restartDescription">这会中断正在运行的程序，并清空所有已连接浏览器的终端画面。</p>
+      <div class="dialog-actions">
+        <button type="button" class="key-btn" id="restart-cancel" data-i18n="cancel" autofocus>取消</button>
+        <button type="button" class="key-btn danger-subtle" id="restart-confirm" data-i18n="confirmRestart">确认重启</button>
+      </div>
+    </dialog>
+
     <!-- xterm.js & FitAddon scripts -->
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/addon-fit.js"></script>
+    <script src="/i18n.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>
