@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Correct first-sign-in guidance to use the local pairing page or the launch directory's `.env`, and add bilingual credential/connectivity troubleshooting.
+- 中文：修正首次登录引导，补充凭据查找、二维码缺失及连接排错说明。
 - Acknowledge terminal shortcuts, suppress duplicate action IDs, block repeated clicks while waiting, and display connection/failure/uncertain-delivery states without automatic key retries.
 - 中文：快捷按钮新增回执、防连点及断线/失败/超时提示，避免静默失败或自动重复发送按键。
 - Add mobile Up/Down/Tab shortcuts and label y/n buttons by the keys they send. Numbered menus can be navigated with arrows and confirmed separately with Enter.

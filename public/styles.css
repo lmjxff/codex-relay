@@ -101,6 +101,13 @@ body {
   outline: none;
 }
 
+.auth-help { color: var(--text-muted); text-align: left; font-size: 0.78rem; line-height: 1.5; margin-bottom: 16px; }
+.auth-help summary { color: var(--accent-blue); cursor: pointer; }
+.auth-help ol { padding-left: 20px; margin-top: 8px; }
+.auth-help li + li { margin-top: 6px; }
+.auth-overlay { overflow-y: auto; }
+.auth-card { margin: auto; }
+
 .auth-input:focus {
   border-color: var(--accent-blue);
 }

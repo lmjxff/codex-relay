@@ -69,6 +69,13 @@ npm start
 
 ## 用手机连接
 
+### 首次登录
+
+1. 保持电脑上的 Relay 运行，在该电脑打开 `http://localhost:3210/qr`；修改过端口时，请使用配置后的端口。
+2. 在电脑上可直接点击配对页中的桌面终端入口。手机先按下文启用局域网或公网模式，再扫描对应二维码。默认仅本机模式不会提供局域网或公网二维码，这是正常行为。
+3. 需要手动输入凭据时，打开 **Relay 启动目录**中的 `.env`，使用 `RELAY_AUTH_TOKEN` 的值。凭据保存在本地，**不会打印在终端日志里**，不要粘贴到 Issue 或截图中。旧 `RELAY_PIN` 只在未设置主要凭据时兜底。
+4. 网页完全打不开时，先检查地址、端口、进程和网络；网页能打开但登录失败时，核对正在运行的实例所使用的凭据。返回 `429` 表示五分钟失败限流窗口尚未结束。
+
 选择一种方式，修改**本地 `.env`** 后重启。你自己的域名只需放在本地配置中，无需写进公开的示例文件或 README。
 
 ### 同一个可信 Wi-Fi
@@ -212,6 +219,9 @@ WebSocket 输出包括 `status`、`history`、`output`、`session-reset`。历�
 
 | 现象 | 检查方法 |
 | --- | --- |
+| 在终端找不到访问凭据 | 程序不会打印凭据。使用本机 `/qr` 配对页，或查看启动目录 `.env` 中的 `RELAY_AUTH_TOKEN`，避免读到另一份项目的配置。 |
+| 配对页没有手机二维码 | 默认仅本机访问。先启用局域网或可用的公网隧道；公网二维码缺失也可能表示隧道尚未连通。 |
+| 快捷按钮提示送达不确定 | 先查看终端再决定是否重按。回执丢失不代表按键未执行，程序不会自动重发。 |
 | 原生依赖安装失败 | 使用 Node 22/24。源码编译需要 Python 和 C++ 工具；Windows 安装 Visual Studio Build Tools，macOS 安装 Command Line Tools，Linux 安装 make/G++。参考 [node-pty 依赖说明](https://github.com/microsoft/node-pty#dependencies)。 |
 | macOS 提示 `posix_spawnp failed` | Relay 启动时会修复 node-pty 已知辅助文件缺少执行权限的问题（[上游缺陷](https://github.com/microsoft/node-pty/issues/919)）。依赖应由当前用户安装并可写；仍失败时检查 Shell 和工作区路径。 |
 | 终端提示找不到 `codex` | 检查当前用户 PATH、CLI 安装与登录、`CODEX_CMD`，先在本机执行确认。 |

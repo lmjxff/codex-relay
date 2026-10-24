@@ -69,6 +69,13 @@ For compiled JavaScript, use `npm run build` then `npm run serve`. `npm run dev`
 
 ## Connect a phone
 
+### First sign-in
+
+1. Keep Relay running on the computer. On that computer, open `http://localhost:3210/qr` (use your configured port if different).
+2. Follow the desktop-console link for local use. For a phone, enable one of the modes below, then scan the corresponding pairing code. The default local-only mode intentionally has no LAN or public code.
+3. If you need to enter a credential manually, open `.env` in the directory from which you launched Relay and use the value of `RELAY_AUTH_TOKEN`. It is saved locally and **not printed in terminal logs**. Do not paste it into Issues or screenshots. Legacy `RELAY_PIN` is only a fallback when no primary credential is set.
+4. If the page cannot be reached at all, check the address, port, process and network first. If the page opens but login fails, check the credential from the running instance. A `429` response means the five-minute failure window is still active.
+
 Choose a mode, edit **local `.env`**, and restart. Your personal domain does not belong in the committed example or README.
 
 ### Same trusted Wi-Fi
@@ -212,6 +219,9 @@ Shortcut messages may include an ID: `{ "type": "action", "id": "<unique-id>", "
 
 | Symptom | Check |
 | --- | --- |
+| Cannot find a credential in terminal output | This is intentional. Use the local `/qr` page or `RELAY_AUTH_TOKEN` in the launch directory's `.env`; check the running instance rather than a different checkout. |
+| Pairing page has no phone code | Defaults allow local access only. Enable LAN or a ready public tunnel first. A missing public code can also mean the tunnel is not connected. |
+| Shortcut reports uncertain delivery | Inspect the terminal before pressing again. The key may have been written even if its acknowledgement was lost; it is never retried automatically. |
 | Native install fails | Use Node 22/24. Source builds need Python and C++ tools: Visual Studio Build Tools on Windows, Command Line Tools on macOS, make/G++ on Linux. See [node-pty prerequisites](https://github.com/microsoft/node-pty#dependencies). |
 | macOS reports `posix_spawnp failed` | Relay repairs missing execute bits on node-pty's known helper files at startup ([upstream defect](https://github.com/microsoft/node-pty/issues/919)). Install dependencies under your own user so they are writable; check shell/workspace paths if the error persists. |
 | `codex` missing in terminal | Check the host user's PATH, CLI installation/sign-in, and `CODEX_CMD`. Run locally first. |
